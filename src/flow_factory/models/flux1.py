@@ -157,7 +157,7 @@ class Flux1Adapter(BaseAdapter):
         else:
             prompt_embeds = prompt_embeds.to(device)
             pooled_prompt_embeds = pooled_prompt_embeds.to(device)
-            text_ids = torch.zeros(batch_size, prompt_embeds.shape[1], 3).to(
+            text_ids = torch.zeros(prompt_embeds.shape[1], 3).to(
                 device=device, dtype=prompt_embeds.dtype
             )
         
