@@ -259,7 +259,7 @@ class Flux1Adapter(BaseAdapter):
         # Extract data from samples
         latents = torch.stack([s.all_latents[timestep_index] for s in samples], dim=0).to(device)
         next_latents = torch.stack([s.all_latents[timestep_index + 1] for s in samples], dim=0).to(device)
-        timesteps = torch.stack([s.timesteps[timestep_index] for s in samples], dim=0).to(device)
+        timestep = torch.stack([s.timesteps[timestep_index] for s in samples], dim=0).to(device)
         
         prompt_embeds = torch.stack([s.prompt_embeds for s in samples], dim=0).to(device)
         pooled_prompt_embeds = torch.stack([s.pooled_prompt_embeds for s in samples], dim=0).to(device)
@@ -276,7 +276,7 @@ class Flux1Adapter(BaseAdapter):
         # Forward pass
         noise_pred = self.pipeline.transformer(
             hidden_states=latents,
-            timestep=timesteps / 1000,
+            timestep=timestep / 1000,
             guidance=guidance,
             pooled_projections=pooled_prompt_embeds,
             encoder_hidden_states=prompt_embeds,
@@ -289,7 +289,7 @@ class Flux1Adapter(BaseAdapter):
         # Compute log prob with ground truth next_latents
         output = self.scheduler.step(
             model_output=noise_pred,
-            timestep=timesteps,
+            timestep=timestep,
             sample=latents,
             prev_sample=next_latents,
             return_log_prob=return_log_prob,
