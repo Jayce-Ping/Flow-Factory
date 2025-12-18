@@ -1,6 +1,6 @@
 # Environment Configuration
 launcher: "accelerate"  # Options: accelerate, torchrun
-config_path: config/accelerate_configs/deepspeed_zero2.yaml  # Path to distributed config file (optional)
+config_file: config/accelerate_configs/deepspeed_zero2.yaml  # Path to distributed config file (optional)
 num_processes: 2
 main_process_port: 29501
 
