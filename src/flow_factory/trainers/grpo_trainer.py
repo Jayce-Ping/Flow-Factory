@@ -13,7 +13,7 @@ tqdm = partial(tqdm_.tqdm, dynamic_ncols=True)
 from .trainer import BaseTrainer
 from ..models.adapter import BaseSample
 from ..rewards.reward_model import BaseRewardModel
-
+import inspect
 
 class GRPOTrainer(BaseTrainer):
     """
@@ -71,12 +71,13 @@ class GRPOTrainer(BaseTrainer):
         rewards = []
         
         # Extract fields needed by reward model
-        filtered_key_fields = samples[0].keys() & set(
-            self.reward_model.__call__.__code__.co_varnames
-        )
-        print("sample[0].keys()=",samples[0].keys())
-        print("self.reward_model.__call__.__code__.co_varnames=", self.reward_model.__call__.__code__.co_varnames)
-        print("filtered_key_fields=",filtered_key_fields)
+        signature = inspect.signature(self.reward_model.__call__)
+        reward_params = list(signature.parameters.keys())
+        
+        filtered_key_fields = [
+            k for k in reward_params 
+            if k in samples[0].keys() and k != 'self'
+        ]
         
         # Batch inference
         for i in tqdm(
