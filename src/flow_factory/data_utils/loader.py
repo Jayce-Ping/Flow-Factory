@@ -26,7 +26,7 @@ def get_dataloader(
         enable_preprocess=data_args.enable_preprocess,
         preprocessing_batch_size=data_args.preprocessing_batch_size,
         text_encode_func=text_encode_func,
-        image_encode_func=image_encode_func
+        image_encode_func=image_encode_func,
     )
     if GeneralDataset.check_exists(data_args.dataset, "test"):
         test_dataset = GeneralDataset(
@@ -35,7 +35,7 @@ def get_dataloader(
             enable_preprocess=data_args.enable_preprocess,
             preprocessing_batch_size=data_args.preprocessing_batch_size,
             text_encode_func=text_encode_func,
-            image_encode_func=image_encode_func
+            image_encode_func=image_encode_func,
         )
 
     # 2. Determine Distributed Context

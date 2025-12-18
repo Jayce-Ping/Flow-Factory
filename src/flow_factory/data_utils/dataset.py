@@ -52,6 +52,7 @@ class GeneralDataset(Dataset):
             
             # Ensure cache directory exists
             os.makedirs(cache_dir, exist_ok=True)
+            fingerprint = f"dataset_{os.path.basename(self.data_root)}_{split}_cache"
             
             self.processed_dataset = raw_dataset.map(
                 self._preprocess_batch,
@@ -59,7 +60,9 @@ class GeneralDataset(Dataset):
                 batch_size=preprocessing_batch_size,
                 fn_kwargs={"image_dir": self.image_dir},
                 remove_columns=raw_dataset.column_names,
+                new_fingerprint=fingerprint,
                 desc="Pre-processing dataset",
+                load_from_cache_file=True,
             )
             
             # Only set format to torch if we are reasonably sure the data is NOT ragged.

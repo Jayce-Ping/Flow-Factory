@@ -4,8 +4,11 @@ Group Relative Policy Optimization (GRPO) Trainer.
 Implements GRPO algorithm for flow matching models.
 """
 from typing import List
+from functools import partial
 import numpy as np
 import torch
+import tqdm as tqdm_
+tqdm = partial(tqdm_.tqdm, dynamic_ncols=True)
 
 from .trainer import BaseTrainer
 from ..models.adapter import BaseSample
@@ -51,7 +54,11 @@ class GRPOTrainer(BaseTrainer):
         samples = []
         data_iter = iter(self.dataloader)
         
-        for batch_index in range(self.training_args.num_batches_per_epoch):
+        for batch_index in tqdm(
+            range(self.training_args.num_batches_per_epoch),
+            desc='Sampling',
+            disable=not self.accelerator.is_local_main_process,
+        ):
             batch = next(data_iter)
             with torch.no_grad():
                 sample_batch = self.adapter.inference(**batch, compute_log_probs=True, **kwargs)
@@ -67,9 +74,14 @@ class GRPOTrainer(BaseTrainer):
         filtered_key_fields = samples[0].keys() & set(
             self.reward_model.__call__.__code__.co_varnames
         )
+        print("filtered_key_fields=",filtered_key_fields)
         
         # Batch inference
-        for i in range(0, len(samples), self.reward_args.batch_size):
+        for i in tqdm(
+            range(0, len(samples), self.reward_args.batch_size),
+            desc='Computing Rewards',
+            disable=not self.accelerator.is_local_main_process,
+        ):
             batch_samples = [
                 {key: getattr(sample, key) for key in filtered_key_fields}
                 for sample in samples[i:i + self.reward_args.batch_size]
@@ -139,17 +151,28 @@ class GRPOTrainer(BaseTrainer):
         self.adapter.train()
         
         with self.accelerator.accumulate(self.adapter):
-            for timestep_index in self.adapter.scheduler.current_noise_steps:
-                # Batch samples
-                batched_samples = [
-                    samples[i:i + self.training_args.per_device_batch_size]
-                    for i in range(0, len(samples), self.training_args.per_device_batch_size)
-                ]
-                batched_advantages = advantages.reshape(
-                    -1, self.training_args.per_device_batch_size
-                )
+            # Batch samples
+            batched_samples = [
+                samples[i:i + self.training_args.per_device_batch_size]
+                for i in range(0, len(samples), self.training_args.per_device_batch_size)
+            ]
+            batched_advantages = advantages.reshape(
+                -1, self.training_args.per_device_batch_size
+            )
 
-                for batch_samples, batch_advantages in zip(batched_samples, batched_advantages):
+            for batch_samples, batch_advantages in tqdm(
+                zip(batched_samples, batched_advantages),
+                desc='Training',
+                position=0,
+                disable=not self.accelerator.is_local_main_process,
+            ):
+                for timestep_index in tqdm(
+                    self.adapter.scheduler.current_noise_steps,
+                    desc='Timestep',
+                    position=1,
+                    leave=False,
+                    disable=not self.accelerator.is_local_main_process,
+                ):
                     # Get old log probs
                     old_log_probs = torch.stack(
                         [sample.log_probs[timestep_index] for sample in batch_samples],

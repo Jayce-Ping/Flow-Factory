@@ -17,10 +17,16 @@ class PickScoreRewardModel(BaseRewardModel):
         self.model = self.model.to(dtype=self.dtype)
         
     @torch.no_grad()
-    def __call__(self, prompts : list[str], images : list[Image.Image]):
+    def __call__(self, prompt : list[str], image : list[Image.Image]):
+        if not isinstance(prompt, list):
+            prompt = [prompt]
+
+        if not isinstance(image, list):
+            image = [image]
+            
         # Preprocess images
         image_inputs = self.processor(
-            images=images,
+            images=image,
             padding=True,
             truncation=True,
             max_length=77,
@@ -29,7 +35,7 @@ class PickScoreRewardModel(BaseRewardModel):
         image_inputs = {k: v.to(device=self.device) for k, v in image_inputs.items()}
         # Preprocess text
         text_inputs = self.processor(
-            text=prompts,
+            text=prompt,
             padding=True,
             truncation=True,
             max_length=77,

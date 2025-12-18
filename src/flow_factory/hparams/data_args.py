@@ -10,11 +10,11 @@ class DataArguments:
         metadata={"help": "Path to the folder containing the datasets."},
     )
     preprocessing_batch_size: int = field(
-        default=16,
+        default=8,
         metadata={"help": "The batch size for preprocessing the datasets."},
     )
     dataloader_num_workers: int = field(
-        default=32,
+        default=16,
         metadata={"help": "The number of workers for DataLoader."},
     )
     enable_preprocess: bool = field(

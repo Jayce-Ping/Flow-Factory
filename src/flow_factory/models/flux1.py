@@ -127,6 +127,7 @@ class Flux1Adapter(BaseAdapter):
     def inference(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
+        prompt_ids : Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         pooled_prompt_embeds: Optional[torch.Tensor] = None,
         height: Optional[int] = None,
