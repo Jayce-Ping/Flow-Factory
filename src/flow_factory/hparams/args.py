@@ -29,6 +29,10 @@ class Arguments:
         default=4,
         metadata={"help": "Number of processes for distributed training."},
     )
+    main_process_port : int = field(
+        default=29500,
+        metadata={"help": "Main process port for distributed training."},
+    )
     data_args: DataArguments = field(
         default_factory=DataArguments,
         metadata={"help": "Arguments for data configuration."},
@@ -62,7 +66,7 @@ class Arguments:
         }
         
         # Extract top-level configs (exclude nested keys)
-        top_level_keys = {'launcher', 'config_path', 'num_processes'}
+        top_level_keys = {'launcher', 'config_path', 'num_processes', 'main_process_port'}
         top_level_args = {k: v for k, v in args_dict.items() if k in top_level_keys}
         
         return cls(**top_level_args, **nested_args)
