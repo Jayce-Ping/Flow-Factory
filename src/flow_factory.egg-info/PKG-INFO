@@ -38,8 +38,6 @@ Requires-Dist: albumentations==1.4.10
 Requires-Dist: opencv-python==4.11.0.86
 Requires-Dist: pillow==10.4.0
 Requires-Dist: tqdm
-Requires-Dist: wandb
-Requires-Dist: swanlab
 Requires-Dist: pydantic==2.10.6
 Requires-Dist: requests==2.32.3
 Requires-Dist: matplotlib==3.10.0
