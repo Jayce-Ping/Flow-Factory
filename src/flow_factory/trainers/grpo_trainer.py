@@ -74,6 +74,8 @@ class GRPOTrainer(BaseTrainer):
         filtered_key_fields = samples[0].keys() & set(
             self.reward_model.__call__.__code__.co_varnames
         )
+        print("sample[0].keys()=",samples[0].keys())
+        print("self.reward_model.__call__.__code__.co_varnames=", self.reward_model.__call__.__code__.co_varnames)
         print("filtered_key_fields=",filtered_key_fields)
         
         # Batch inference

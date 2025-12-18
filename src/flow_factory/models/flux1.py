@@ -224,9 +224,8 @@ class Flux1Adapter(BaseAdapter):
         timesteps_tensor = timesteps.unsqueeze(0).expand(batch_size, -1)
         
         # Create samples
-        samples = []
-        for b in range(batch_size):
-            sample = Flux1Sample(
+        samples = [
+            Flux1Sample(
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
                 timesteps=timesteps_tensor[b],
                 prompt_ids=prompt_ids[b] if prompt_ids is not None else None,
@@ -238,7 +237,8 @@ class Flux1Adapter(BaseAdapter):
                 pooled_prompt_embeds=pooled_prompt_embeds[b],
                 log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_probs else None,
             )
-            samples.append(sample)
+            for b in range(batch_size)
+        ]
         
         return samples
 
