@@ -34,10 +34,6 @@ def load_trainer(
     Returns:
         An instance of a subclass of BaseTrainer
     """
-    data_args = config.data_args
-    training_args = config.training_args
-    reward_args = config.reward_args
-    model_args = config.model_args
     # Initialize Accelerator
     accelerator_config = ProjectConfiguration(
         project_dir=os.path.join(config.training_args.save_dir, config.training_args.run_name),
@@ -51,7 +47,7 @@ def load_trainer(
     set_seed(config.training_args.seed)
 
     # Initialize model adapter    
-    adapter = load_model(model_args=model_args, training_args=training_args)
+    adapter = load_model(config=config)
 
     # Initialize trainer
     trainer_type = config.training_args.trainer_type.lower()

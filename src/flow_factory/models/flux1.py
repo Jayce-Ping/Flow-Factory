@@ -175,7 +175,10 @@ class Flux1Adapter(BaseAdapter):
         
         # Set timesteps with scheduler
         timesteps = set_scheduler_timesteps(
-            self.scheduler, num_inference_steps, latents.shape[1], device
+            scheduler=self.pipeline.scheduler,
+            num_inference_steps=num_inference_steps,
+            seq_len=latents.shape[1],
+            device=device,
         )
 
         guidance = torch.full([1], guidance_scale, device=device, dtype=torch.float32)

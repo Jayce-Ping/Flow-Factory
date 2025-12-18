@@ -4,11 +4,11 @@ from typing import Tuple
 from accelerate import Accelerator
 from .adapter import BaseAdapter
 from .flux1 import Flux1Adapter
-from ..hparams import TrainingArguments, ModelArguments
+from ..hparams import *
 
 logger = logging.getLogger(__name__)
 
-def load_model(model_args : ModelArguments, training_args : TrainingArguments) -> BaseAdapter:
+def load_model(config : Arguments) -> BaseAdapter:
     """
     Factory function to instantiate the correct model adapter based on configuration.
     
@@ -19,11 +19,12 @@ def load_model(model_args : ModelArguments, training_args : TrainingArguments) -
     Returns:
         An instance of a subclass of BaseAdapter.
     """
+    model_args = config.model_args
     model_type = model_args.model_type.lower()
     
     logger.info(f"Loading model architecture: {model_type}...")
     
     if model_type == "flux1":
-        return Flux1Adapter(model_args=model_args, training_args=training_args)
+        return Flux1Adapter(config=config)
     else:
         raise ValueError(f"Unknown model type: {model_type}. Supported: ['flux', 'sd3', 'sd']")
