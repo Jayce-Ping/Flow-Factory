@@ -1,14 +1,23 @@
+# src/flow_factory/hparams/args.py
+"""
+Main arguments class that encapsulates all configurations.
+Supports loading from YAML files with nested structure.
+"""
+from __future__ import annotations
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any
 import yaml
+
 from .data_args import DataArguments
 from .model_args import ModelArguments
 from .training_args import TrainingArguments
 from .reward_args import RewardArguments
 
+
 @dataclass
 class Arguments:
-    r"""Main arguments class encapsulating all configurations."""
+    """Main arguments class encapsulating all configurations."""
+    
     data_args: DataArguments = field(
         default_factory=DataArguments,
         metadata={"help": "Arguments for data configuration."},
@@ -25,25 +34,36 @@ class Arguments:
         default_factory=RewardArguments,
         metadata={"help": "Arguments for reward model configuration."},
     )
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
     
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return asdict(self)
 
-def from_dict(cls, args_dict: dict[str, Any]) -> 'Arguments':
-    """Create Arguments instance from dictionary."""
-    data_args = DataArguments(**args_dict.get('data', {}))
-    model_args = ModelArguments(**args_dict.get('model', {}))
-    training_args = TrainingArguments(**args_dict.get('train', {}))
-    reward_args = RewardArguments(**args_dict.get('reward', {}))
-    return cls(
-        data_args=data_args,
-        model_args=model_args,
-        training_args=training_args,
-        reward_args=reward_args,
-    )
+    @classmethod
+    def from_dict(cls, args_dict: dict[str, Any]) -> Arguments:
+        """
+        Create Arguments instance from dictionary.
+        This is a Factory Method.
+        """
+        data_args = DataArguments(**args_dict.get('data', {}))
+        model_args = ModelArguments(**args_dict.get('model', {}))
+        training_args = TrainingArguments(**args_dict.get('train', {}))
+        reward_args = RewardArguments(**args_dict.get('reward', {}))
+        
+        return cls(
+            data_args=data_args,
+            model_args=model_args,
+            training_args=training_args,
+            reward_args=reward_args,
+        )
 
-def load_from_yaml(cls, yaml_file: str) -> 'Arguments':
-    """Load Arguments from a YAML file."""
-    with open(yaml_file, 'r') as f:
-        args_dict = yaml.safe_load(f)
-    return from_dict(cls, args_dict)
+    @classmethod
+    def load_from_yaml(cls, yaml_file: str) -> Arguments:
+        """
+        Load Arguments from a YAML configuration file.
+        Example: args = Arguments.load_from_yaml("config.yaml")
+        """
+        with open(yaml_file, 'r', encoding='utf-8') as f:
+            args_dict = yaml.safe_load(f)
+        
+        return cls.from_dict(args_dict)

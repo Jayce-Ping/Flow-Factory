@@ -1,38 +1,61 @@
-# src/flow_factory/models/reward_model.py
+# src/flow_factory/rewards/reward_model.py
+"""
+Base class for reward models.
+Provides common interface for all reward models.
+"""
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, List, Union
+from typing import Dict, Any, Optional, Union, List
 import torch
 import torch.nn as nn
 import numpy as np
 from dataclasses import dataclass
 from PIL import Image
-from ..hparams.training_args import TrainingArguments
-from ..hparams.reward_args import RewardArguments
 
 from diffusers.utils.outputs import BaseOutput
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+from ..hparams.reward_args import RewardArguments
+
 
 @dataclass
 class RewardModelOutput(BaseOutput):
     """
     Output class for Reward models.
+    
+    Args:
+        rewards: Reward values (can be tensor, numpy array, or list)
+        extra_info: Optional additional information
     """
-    rewards : Union[torch.FloatTensor, np.ndarray, List[float]]
-    extra_info : Optional[Dict[str, Any]] = None
+    rewards: Union[torch.FloatTensor, np.ndarray, List[float]]
+    extra_info: Optional[Dict[str, Any]] = None
 
-class BaseRewardModel(ABC, nn.Module):
+
+class BaseRewardModel(ABC):
     """
     Abstract Base Class for reward models.
+    
+    All reward models should inherit from this class and implement
+    the __call__ method to compute rewards.
     """
-    def __init__(
-            self,
-            reward_args : RewardArguments,
-        ):
+    
+    def __init__(self, reward_args: RewardArguments):
+        """
+        Initialize reward model.
+        
+        Args:
+            reward_args: Reward model configuration
+        """
         self.reward_args = reward_args
         self.device = reward_args.torch_device
         self.dtype = reward_args.torch_dtype
 
     @abstractmethod
-    def __call__(self, **inputs) -> RewardModelOutput:
-        """Compute reward given inputs."""
+    def __call__(self, **inputs) -> Union[RewardModelOutput, torch.Tensor, np.ndarray, List[float]]:
+        """
+        Compute reward given inputs.
+        
+        Args:
+            **inputs: Model-specific inputs (e.g., prompts, images)
+        
+        Returns:
+            Rewards (RewardModelOutput, tensor, array, or list)
+        """
         pass

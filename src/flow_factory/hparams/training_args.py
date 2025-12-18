@@ -201,10 +201,10 @@ class TrainingArguments:
             self.resolution : Tuple[int, int]= (self.resolution, self.resolution)
         
         if not isinstance(self.clip_range, tuple):
-            self.clip_range : Tuple[float, float] = (self.clip_range, self.clip_range)
+            self.clip_range = (-self.clip_range, self.clip_range)
 
         if not isinstance(self.adv_clip_range, tuple):
-            self.adv_clip_range : Tuple[float, float] = (self.adv_clip_range, self.adv_clip_range)
+            self.adv_clip_range = (-self.adv_clip_range, self.adv_clip_range)
 
         if self.eval_args.seed is None:
             self.eval_args.seed = self.seed
