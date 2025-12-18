@@ -51,7 +51,8 @@ def run_distributed_supervisor(config, args: List[str]):
         
         if config.config_file is not None:
             cmd.extend(["--config_file", config.config_file])
-    
+
+        cmd.extend(["--main_process_port", str(config.main_process_port)])    
         cmd.extend(["--num_processes", str(config.num_processes)])
 
     # --- 2. Application Layer ---

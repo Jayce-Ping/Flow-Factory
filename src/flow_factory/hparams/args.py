@@ -66,7 +66,7 @@ class Arguments:
         }
         
         # Extract top-level configs (exclude nested keys)
-        top_level_keys = {'launcher', 'config_path', 'num_processes', 'main_process_port'}
+        top_level_keys = {'launcher', 'config_file', 'num_processes', 'main_process_port'}
         top_level_args = {k: v for k, v in args_dict.items() if k in top_level_keys}
         
         return cls(**top_level_args, **nested_args)
