@@ -1,0 +1,68 @@
+# Data Configuration
+data:
+  dataset_dir: "dataset/t2is"  # Path to dataset folder
+  preprocessing_batch_size: 16  # Batch size for preprocessing
+  dataloader_num_workers: 32  # Number of workers for DataLoader
+  enable_preprocess: true  # Enable dataset preprocessing
+
+# Model Configuration
+model:
+  model_name_or_path: "black-forest-labs/FLUX.1-dev"  # HuggingFace model ID or local path
+  model_type: "flux1"  # Options: sd3, flux1, flux1-kontext, flux2, qwenimage, qwenimage-edit
+  lora_path: null  # Path to LoRA weights (optional)
+  save_path: null  # Path to save checkpoints (optional)
+
+# Training Configuration
+train:
+  # Image settings
+  resolution: 512  # Can be int or [height, width]
+  
+  # Batch and sampling
+  per_device_batch_size: 1  # Batch size per device
+  group_size: 16  # Group size for GRPO sampling
+  global_std: true  # Use global std for advantage normalization
+  unique_sample_num_per_epoch: 8  # Unique samples per group
+  gradient_step_per_epoch: 2  # Gradient steps per epoch
+  
+  # Clipping
+  clip_range: 1.0e-4  # PPO/GRPO clipping range
+  adv_clip_range: 5.0  # Advantage clipping range
+  max_grad_norm: 1.0  # Max gradient norm for clipping
+  
+  # Denoising process
+  sde_type: "Flow-SDE"  # Options: Flow-SDE, Dance-SDE, CPS
+  num_timesteps: 10  # Number of SDE timesteps
+  noise_level: 0.7  # Noise level for sampling
+  num_noise_steps: 1  # Number of noise steps
+  noise_steps: [1, 2, 3]  # Custom noise window (auto: first half of timesteps)
+  
+  # Optimization
+  seed: 42  # Random seed
+  learning_rate: 3.0e-4  # Initial learning rate
+  adam_weight_decay: 1.0e-4  # AdamW weight decay
+  adam_beta1: 0.9  # AdamW beta1
+  adam_beta2: 0.999  # AdamW beta2
+  adam_epsilon: 1.0e-8  # AdamW epsilon
+  
+  # Training settings
+  mixed_precision: "bf16"  # Options: no, fp16, bf16
+  save_freq: 10  # Save frequency in epochs (0 to disable)
+  save_dir: "logs"  # Directory for logs and checkpoints
+  run_name: null  # Run name (auto: timestamp)
+  
+  # Evaluation settings
+  eval_args:
+    resolution: 1024  # Evaluation resolution
+    per_device_batch_size: 1  # Eval batch size
+    seed: null  # Eval seed (defaults to training seed)
+    guidance_scale: 3.5  # Guidance scale for sampling
+    num_timesteps: 30  # Number of eval timesteps
+    eval_freq: 10  # Eval frequency in epochs (0 to disable)
+
+# Reward Model Configuration
+reward:
+  reward_model: "PickScore"  # Model name or path:class_name
+  dtype: "float16"  # Options: float16, bfloat16, float32
+  device: "cuda"  # Options: cpu, cuda
+  reward_model_kwargs: null  # Additional kwargs for reward model
+  batch_size: 16  # Inference batch size

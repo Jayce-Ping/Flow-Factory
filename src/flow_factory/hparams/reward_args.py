@@ -1,0 +1,78 @@
+
+import math
+from dataclasses import asdict, dataclass, field
+from typing import Any, Literal, Optional
+from logging import getLogger
+import torch
+import torch.distributed as dist
+
+
+from ..rewards.pick_score import PickScoreRewardModel
+
+logger = getLogger(__name__)
+
+def get_world_size() -> int:
+    if dist.is_initialized():
+        return dist.get_world_size()
+    return 1
+
+@dataclass
+class RewardArguments:
+    r"""Arguments pertaining to reward configuration."""
+
+    reward_model : str = field(
+        default='PickScore',
+        metadata={"help": "The path or name of the reward model to use. You can specify 'PickScore' to use the default PickScore model. Or /path/to/your/model:class_name to use your own reward model."},
+    )
+
+    dtype: Literal['float16', 'bfloat16', 'float32'] = field(
+        default='float16',
+        metadata={"help": "The data type for the reward model."},
+    )
+
+    device: Literal['cpu', 'cuda'] = field(
+        default='cuda',
+        metadata={"help": "The device to load the reward model on."},
+    )
+
+    reward_model_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={"help": "Additional keyword arguments for the reward model."},
+    )
+
+    batch_size: int = field(
+        default=16,
+        metadata={"help": "Batch size for reward model inference."},
+    )
+
+    def __post_init__(self):
+        # Convert dtype string to torch dtype
+        dtype_map = {
+            'float16': torch.float16,
+            'bfloat16': torch.bfloat16,
+            'float32': torch.float32,
+        }
+        self.torch_dtype = dtype_map[self.dtype]
+
+        # Convert device string to torch device
+        self.torch_device = torch.device(self.device)
+
+        # Parse reward model name/path
+        reward_model_mapping = {
+            'PickScore': PickScoreRewardModel,
+        }
+        if self.reward_model in reward_model_mapping:
+            self.reward_model_cls = reward_model_mapping[self.reward_model]
+        else:
+            if ':' in self.reward_model:
+                path, class_name = self.reward_model.split(':')
+                module = __import__(path.replace('/', '.'), fromlist=[class_name])
+                self.reward_model_cls = getattr(module, class_name)
+            else:
+                raise ValueError(f"Unknown reward model: {self.reward_model}")
+
+
+        
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

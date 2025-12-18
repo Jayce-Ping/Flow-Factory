@@ -1,0 +1,29 @@
+from dataclasses import asdict, dataclass, field
+from typing import Any, Literal, Optional
+
+
+@dataclass
+class DataArguments:
+    r"""Arguments pertaining to data input for training and evaluation."""
+    dataset_dir: str = field(
+        default="data",
+        metadata={"help": "Path to the folder containing the datasets."},
+    )
+    preprocessing_batch_size: int = field(
+        default=16,
+        metadata={"help": "The batch size for preprocessing the datasets."},
+    )
+    dataloader_num_workers: int = field(
+        default=32,
+        metadata={"help": "The number of workers for DataLoader."},
+    )
+    enable_preprocess: bool = field(
+        default=True,
+        metadata={"help": "Whether to enable preprocessing of the dataset."},
+    )
+
+    def __post_init__(self):
+        self.dataset = self.dataset_dir
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
