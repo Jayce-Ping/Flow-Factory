@@ -5,21 +5,29 @@ import torch
 from diffusers.pipelines.flux.pipeline_flux import FluxPipeline
 from PIL import Image
 
+from ..hparams import ModelArguments, TrainingArguments
 from .adapter import BaseAdapter, BaseSample
-from ..scheduler.flow_matching import FlowMatchEulerDiscreteSDESchedulerOutput, set_scheduler_timesteps
+from ..scheduler.flow_matching import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput, set_scheduler_timesteps
 
 @dataclass
-class FluxSample(BaseSample):
+class Flux1Sample(BaseSample):
     """Output class for Flux Adapter models."""
     pass
 
 
-class FluxAdapter(BaseAdapter):
+class Flux1Adapter(BaseAdapter):
     """Concrete implementation for Flow Matching models (FLUX.1)."""
     
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, model_args: ModelArguments, training_args: TrainingArguments):
+        super().__init__(model_args, training_args)
         
+        # Initialize Scheduler
+        self.pipeline.scheduler = FlowMatchEulerDiscreteSDEScheduler(
+            noise_level=training_args.noise_level,
+            noise_steps=training_args.noise_steps,
+            num_noise_steps=training_args.num_noise_steps,
+        )
+
         # Load pipeline
         self.pipeline = FluxPipeline.from_pretrained(
             self.model_args.model_name_or_path,
@@ -27,15 +35,24 @@ class FluxAdapter(BaseAdapter):
         )
         
         # Freeze non-trainable components
-        self.pipeline.vae.requires_grad_(False)
-        self.pipeline.text_encoder.requires_grad_(False)
-        self.pipeline.text_encoder_2.requires_grad_(False)
-        
-        # Use custom SDE scheduler
-        self.pipeline.scheduler = self.scheduler
+        self._freeze_components()
 
     # ======================== Component Management ========================
     
+    @property
+    def transformer(self) -> torch.nn.Module:
+        return self.pipeline.transformer
+
+    @property
+    def scheduler(self) -> FlowMatchEulerDiscreteSDEScheduler:
+        return self.pipeline.scheduler
+
+    def _freeze_components(self):
+        """Encapsulate freezing logic for cleanliness."""
+        self.pipeline.vae.requires_grad_(False)
+        self.pipeline.text_encoder.requires_grad_(False)
+        self.pipeline.text_encoder_2.requires_grad_(False)
+
     def off_load_text_encoder(self):
         self.pipeline.text_encoder.to("cpu")
         self.pipeline.text_encoder_2.to("cpu")
@@ -61,17 +78,17 @@ class FluxAdapter(BaseAdapter):
 
     # ======================== Encoding & Decoding ========================
     
-    def encode_prompts(self, prompts: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
+    def encode_prompts(self, prompt: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """Encode text prompts using the pipeline's text encoder."""
         
         prompt_embeds, pooled_prompt_embeds, text_ids = self.pipeline.encode_prompt(
-            prompt=prompts,
+            prompt=prompt,
             prompt_2=None,
             device=self.device,
         )
         
         prompt_ids = self.pipeline.tokenizer_2(
-            prompts,
+            prompt,
             padding="max_length",
             max_length=512,
             truncation=True,
@@ -116,7 +133,7 @@ class FluxAdapter(BaseAdapter):
         generator: Optional[torch.Generator] = None,
         compute_log_probs: bool = True,
         **kwargs,
-    ) -> List[FluxSample]:
+    ) -> List[Flux1Sample]:
         """Execute generation and return FluxSample objects."""
         
         # Setup
@@ -155,8 +172,7 @@ class FluxAdapter(BaseAdapter):
         timesteps = set_scheduler_timesteps(
             self.scheduler, num_inference_steps, latents.shape[1], device
         )
-        self.scheduler.set_begin_index(0)
-        
+
         guidance = torch.full([1], guidance_scale, device=device, dtype=torch.float32)
         
         # Denoising loop
@@ -201,7 +217,7 @@ class FluxAdapter(BaseAdapter):
         # Create samples
         samples = []
         for b in range(batch_size):
-            sample = FluxSample(
+            sample = Flux1Sample(
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
                 timesteps=timesteps_tensor[b],
                 prompt_ids=prompt_ids[b] if prompt_ids is not None else None,
@@ -221,7 +237,7 @@ class FluxAdapter(BaseAdapter):
     
     def forward(
         self,
-        samples: List[FluxSample],
+        samples: List[Flux1Sample],
         timestep_index : int,
         return_log_prob: bool = True,
         **kwargs,
@@ -276,7 +292,37 @@ class FluxAdapter(BaseAdapter):
         return output
 
     # ======================== Utilities ========================
+
+    @property
+    def default_lora_target_modules(self) -> List[str]:
+        return [
+            "attn.to_k", "attn.to_q", "attn.to_v", "attn.to_out.0",
+            "attn.add_k_proj", "attn.add_q_proj", "attn.add_v_proj", "attn.to_add_out",
+            "ff.net.0.proj", "ff.net.2",
+            "ff_context.net.0.proj", "ff_context.net.2",
+        ]
     
+    def apply_lora(self):
+        """Apply LoRA adapters to the model if specified."""
+        from peft import get_peft_model, LoraConfig, PeftModel
+
+        if self.model_args.lora_path:
+            transformer = PeftModel.from_pretrained(self.pipeline.transformer, self.model_args.lora_path)
+            self.pipeline.transformer = transformer
+        else:
+            lora_config = LoraConfig(
+                r=self.model_args.lora_rank,
+                lora_alpha=self.model_args.lora_alpha,
+                init_lora_weights="gaussian",
+                target_modules=self.default_lora_target_modules,
+            )
+            transformer = get_peft_model(self.pipeline.transformer, lora_config)
+            transformer.set_adapter("default")
+            self.pipeline.transformer = transformer
+        
+        return transformer
+
+
     def enable_gradient_checkpointing(self):
         """Enable gradient checkpointing for memory efficiency."""
         if hasattr(self.pipeline.transformer, 'enable_gradient_checkpointing'):
@@ -284,7 +330,7 @@ class FluxAdapter(BaseAdapter):
     
     def get_trainable_parameters(self) -> List[torch.nn.Parameter]:
         """Get trainable parameters for optimizer."""
-        return list(self.pipeline.transformer.parameters())
+        return [p for p in self.pipeline.transformer.parameters() if p.requires_grad]
     
     def load_checkpoint(self, path: str):
         """Load checkpoint."""

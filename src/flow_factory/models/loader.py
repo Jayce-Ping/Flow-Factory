@@ -1,11 +1,10 @@
 # src/flow_factory/model/loader.py
 import logging
 from typing import Tuple
+from accelerate import Accelerator
 from .adapter import BaseAdapter
-from .flux import FluxAdapter
-from .sd3 import StableDiffusionAdapter
-from ..hparams.training_args import TrainingArguments
-from ..hparams.model_args import ModelArguments
+from .flux1 import Flux1Adapter
+from ..hparams import TrainingArguments, ModelArguments
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +23,7 @@ def load_model(model_args : ModelArguments, training_args : TrainingArguments) -
     
     logger.info(f"Loading model architecture: {model_type}...")
     
-    if model_type == "flux":
-        return FluxAdapter(model_args)
-        
-    elif model_type in ["sd3", "sdxl", "stable_diffusion"]:
-        return StableDiffusionAdapter(model_args)
-        
+    if model_type == "flux1":
+        return Flux1Adapter(model_args=model_args, training_args=training_args)
     else:
         raise ValueError(f"Unknown model type: {model_type}. Supported: ['flux', 'sd3', 'sd']")

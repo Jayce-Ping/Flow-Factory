@@ -3,6 +3,7 @@
 Command-line interface for Flow-Factory.
 """
 import sys
+import os
 import argparse
 from pathlib import Path
 
@@ -52,30 +53,10 @@ Examples:
     print(f"Loading configuration from: {args.config}")
     config = Arguments.load_from_yaml(args.config)
     
-    # Load model adapter
-    print(f"Loading model: {config.model_args.model_type}")
-    adapter = load_model(
-        model_args=config.model_args,
-        training_args=config.training_args,
-    )
-    
     # Load trainer
-    print(f"Loading trainer: grpo")
-    trainer = load_trainer(
-        trainer_type="grpo",
-        data_args=config.data_args,
-        training_args=config.training_args,
-        reward_args=config.reward_args,
-        adapter=adapter,
-    )
+    print(f"Loading trainer: GRPO")
+    trainer = load_trainer(config=config)
     
-    # Resume from checkpoint if specified
-    if args.resume:
-        print(f"Resuming from checkpoint: {args.resume}")
-        trainer.load_checkpoint(args.resume)
-    
-    # Start training
-    print("Starting training...")
     trainer.run()
 
 

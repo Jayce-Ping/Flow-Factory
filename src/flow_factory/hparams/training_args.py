@@ -2,7 +2,7 @@ import os
 import math
 from datetime import datetime
 from dataclasses import asdict, dataclass, field
-from typing import Any, List, Literal, Union, Optional, Tuple
+from typing import Any, List, Literal, Union, Optional, Tuple, Dict
 from logging import getLogger
 import torch.distributed as dist
 from datetime import datetime
@@ -78,6 +78,10 @@ class TrainingArguments:
     )
 
     # PPO/GRPO Clip arguments
+    trainer_type: Literal["grpo"] = field(
+        default="grpo",
+        metadata={"help": "Type of trainer to use."},
+    )
     clip_range: Union[float, tuple[float, float]] = field(
         default=1e-4,
         metadata={"help": "Clipping range for PPO/GRPO."},
@@ -175,7 +179,7 @@ class TrainingArguments:
     )
 
     # Nested evaluation arguments
-    eval_args: EvaluationArguments = field(
+    eval_args: Union[dict, EvaluationArguments] = field(
         default_factory=EvaluationArguments,
         metadata={"help": "Evaluation arguments."},
     )
@@ -198,13 +202,16 @@ class TrainingArguments:
         self.gradient_accumulation_steps = max(1, self.num_batches_per_epoch // self.gradient_step_per_epoch)
 
         if isinstance(self.resolution, int):
-            self.resolution : Tuple[int, int]= (self.resolution, self.resolution)
+            self.resolution = (self.resolution, self.resolution)
         
         if not isinstance(self.clip_range, tuple):
             self.clip_range = (-self.clip_range, self.clip_range)
 
         if not isinstance(self.adv_clip_range, tuple):
             self.adv_clip_range = (-self.adv_clip_range, self.adv_clip_range)
+
+        if isinstance(self.eval_args, dict):
+            self.eval_args = EvaluationArguments(**self.eval_args)
 
         if self.eval_args.seed is None:
             self.eval_args.seed = self.seed

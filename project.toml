@@ -1,71 +1,96 @@
 # pyproject.toml
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "flow-factory"
 version = "0.1.0"
-description = "Unified RL Fine-tuning Framework for Diffusion Models"
+description = "Unified RL Fine-tuning Framework for Diffusion/Flow-Matching Models"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
-keywords = ["diffusion", "reinforcement-learning", "grpo", "flux", "stable-diffusion"]
 authors = [
     {name = "Flow-Factory Team"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 
+# Core Dependencies (Aligned with PaCo ecosystem but using valid versions)
 dependencies = [
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
-    "diffusers>=0.28.0",
-    "transformers>=4.30.0",
-    "accelerate>=0.20.0",
-    "datasets>=2.14.0",
+    # --- Deep Learning Core ---
+    "torch>=2.4.0",           # Python 3.12 support requires newer Torch
+    "torchvision>=0.19.0",
+    "torchaudio>=2.4.0",
+    
+    # --- Hugging Face Ecosystem ---
+    "transformers>=4.44.0",   # Required for Flux/T5
+    "diffusers>=0.30.0",      # Required for Flow Matching
+    "accelerate>=0.33.0",
+    "peft>=0.12.0",           # Parameter Efficient Fine-Tuning
+    "datasets>=2.20.0",
+    "tokenizers>=0.19.0",
+    "huggingface-hub>=0.24.0",
+
+    # --- Optimization & Training ---
+    "deepspeed>=0.14.0",      # For ZeRO stage optimization
+    "bitsandbytes>=0.43.0",   # For 8-bit/4-bit quantization
+    "einops>=0.8.0",
+    
+    # --- Critical Fixes for Flux/T5 ---
+    "protobuf>=3.20.3",       # REQUIRED for T5 serialization
+    "sentencepiece>=0.2.0",   # REQUIRED for T5 tokenizer
+
+    # --- Data Processing ---
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
+    "pillow>=10.4.0",
+    "scipy>=1.13.0",
+    "scikit-learn>=1.5.0",
+    "scikit-image>=0.24.0",
+    "albumentations>=1.4.0",
+    "opencv-python>=4.10.0",
+
+    # --- Logging & Utils ---
+    "tqdm",
+    "wandb",
+    "swanlab",                # As used in PaCo
+    "pydantic>=2.8.0",
     "pyyaml>=6.0",
-    "pillow>=9.0.0",
-    "numpy>=1.24.0",
-    "tqdm>=4.65.0",
+    "absl-py",
+    "ml_collections",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
-    "black>=23.0.0",
-    "isort>=5.12.0",
-    "flake8>=6.0.0",
+    "pytest>=8.0.0",
+    "black>=24.0.0",
+    "isort>=5.13.0",
+    "flake8>=7.0.0",
+    "ipython",
 ]
-reward = [
-    "ImageReward>=1.0.0",
+# For NVIDIA specific optimized kernels (optional as they can be tricky to install)
+nvidia = [
+    "xformers>=0.0.27",
+    "nvidia-ml-py",
 ]
 
 [project.scripts]
 flow-factory-train = "flow_factory.cli:train_cli"
 flow-factory-eval = "flow_factory.cli:eval_cli"
 
-[project.urls]
-Homepage = "https://github.com/your-org/flow-factory"
-Documentation = "https://github.com/your-org/flow-factory/docs"
-Repository = "https://github.com/your-org/flow-factory"
-
-[tool.setuptools]
-package-dir = {"" = "src"}
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.black]
 line-length = 100
-target-version = ['py38', 'py39', 'py310']
+target-version = ['py310', 'py311', 'py312']
 
 [tool.isort]
 profile = "black"

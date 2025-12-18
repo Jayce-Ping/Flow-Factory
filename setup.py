@@ -27,16 +27,43 @@ setup(
     
     # Dependencies
     install_requires=[
-        "torch>=2.0.0",
-        "torchvision>=0.15.0",
-        "diffusers>=0.28.0",
-        "transformers>=4.30.0",
-        "accelerate>=0.20.0",
-        "datasets>=2.14.0",
-        "pyyaml>=6.0",
-        "pillow>=9.0.0",
-        "numpy>=1.24.0",
-        "tqdm>=4.65.0",
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        "torchaudio",
+        "transformers==4.57.1",
+        "accelerate==1.11.0",
+        "diffusers==0.35.2",
+
+        "deepspeed==0.17.4",
+        "peft==0.17.1",
+        "bitsandbytes==0.45.3",        
+        "huggingface-hub==0.35.3",
+        "tokenizers==0.22.1",
+
+        "datasets==3.3.2",
+        "numpy==1.26.4",
+        "pandas==2.2.3",
+        "scipy==1.15.2",
+        "scikit-learn==1.6.1",
+        "scikit-image==0.25.2",
+        "open-clip-torch==3.1.0",
+        
+        "albumentations==1.4.10",  
+        "opencv-python==4.11.0.86",
+        "pillow==10.4.0",
+        
+        "tqdm",
+        "pydantic==2.10.6",  
+        "requests==2.32.3",
+        "matplotlib==3.10.0",
+        "aiohttp==3.11.13",
+        "fastapi==0.115.11", 
+        "uvicorn==0.34.0",
+        "einops==0.8.1",
+        "nvidia-ml-py==12.570.86",
+        "xformers",
+        "absl-py",
+        "sentencepiece",
     ],
     
     # Optional dependencies
@@ -69,6 +96,8 @@ setup(
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     

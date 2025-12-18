@@ -30,6 +30,16 @@ class ModelArguments:
         metadata={"help": "Path to LoRA weights."},
     )
 
+    lora_rank : int = field(
+        default=8,
+        metadata={"help": "Rank for LoRA adapters."},
+    )
+
+    lora_alpha : int = field(
+        default=16,
+        metadata={"help": "Alpha scaling factor for LoRA adapters."},
+    )
+
     save_path: Optional[str] = field(
         default=None,
         metadata={"help": "Path to save the model checkpoints."},

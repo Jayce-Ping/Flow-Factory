@@ -3,25 +3,23 @@
 Trainer loader factory for extensibility.
 Supports multiple RL algorithms and can be easily extended.
 """
+import os
+from accelerate import Accelerator
+from accelerate.utils import set_seed, ProjectConfiguration
 from typing import Literal
 from logging import getLogger
 
+from ..models.loader import load_model
 from .trainer import BaseTrainer
 from .grpo_trainer import GRPOTrainer
-from ..hparams.data_args import DataArguments
-from ..hparams.training_args import TrainingArguments
-from ..hparams.reward_args import RewardArguments
-from ..models.adapter import BaseAdapter
+from ..hparams import *
+
 
 logger = getLogger(__name__)
 
 
 def load_trainer(
-    trainer_type: Literal["grpo"] = "grpo",
-    data_args: DataArguments = None,
-    training_args: TrainingArguments = None,
-    reward_args: RewardArguments = None,
-    adapter: BaseAdapter = None,
+    config : Arguments,
 ) -> BaseTrainer:
     """
     Factory function to instantiate the correct trainer based on algorithm type.
@@ -36,13 +34,29 @@ def load_trainer(
     Returns:
         An instance of a subclass of BaseTrainer
     """
-    trainer_type = trainer_type.lower()
-    
-    logger.info(f"Loading trainer: {trainer_type}...")
-    
+    data_args = config.data_args
+    training_args = config.training_args
+    reward_args = config.reward_args
+    model_args = config.model_args
+    # Initialize Accelerator
+    accelerator_config = ProjectConfiguration(
+        project_dir=os.path.join(config.training_args.save_dir, config.training_args.run_name),
+        automatic_checkpoint_naming=True,
+    )
+    accelerator = Accelerator(
+        mixed_precision=config.training_args.mixed_precision,
+        project_config=accelerator_config,
+        gradient_accumulation_steps=config.training_args.gradient_accumulation_steps * config.training_args.num_timesteps,
+    )
+    set_seed(config.training_args.seed)
+
+    # Initialize model adapter    
+    adapter = load_model(model_args=model_args, training_args=training_args)
+
+    # Initialize trainer
+    trainer_type = config.training_args.trainer_type.lower()
     trainer_mapping = {
         "grpo": GRPOTrainer,
-        # Future extensions:
     }
     
     if trainer_type not in trainer_mapping:
@@ -54,8 +68,7 @@ def load_trainer(
     trainer_cls = trainer_mapping[trainer_type]
     
     return trainer_cls(
-        data_args=data_args,
-        training_args=training_args,
-        reward_args=reward_args,
+        config=config,
+        accelerator=accelerator,
         adapter=adapter,
     )

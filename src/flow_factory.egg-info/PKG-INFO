@@ -12,18 +12,45 @@ Classifier: Programming Language :: Python :: 3
 Classifier: Programming Language :: Python :: 3.8
 Classifier: Programming Language :: Python :: 3.9
 Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
 Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
 Requires-Python: >=3.8
-Requires-Dist: torch>=2.0.0
-Requires-Dist: torchvision>=0.15.0
-Requires-Dist: diffusers>=0.28.0
-Requires-Dist: transformers>=4.30.0
-Requires-Dist: accelerate>=0.20.0
-Requires-Dist: datasets>=2.14.0
-Requires-Dist: pyyaml>=6.0
-Requires-Dist: pillow>=9.0.0
-Requires-Dist: numpy>=1.24.0
-Requires-Dist: tqdm>=4.65.0
+Requires-Dist: torch==2.8.0
+Requires-Dist: torchvision==0.23.0
+Requires-Dist: torchaudio
+Requires-Dist: transformers==4.57.1
+Requires-Dist: accelerate==1.11.0
+Requires-Dist: diffusers==0.35.2
+Requires-Dist: deepspeed==0.17.4
+Requires-Dist: peft==0.17.1
+Requires-Dist: bitsandbytes==0.45.3
+Requires-Dist: huggingface-hub==0.35.3
+Requires-Dist: tokenizers==0.22.1
+Requires-Dist: datasets==3.3.2
+Requires-Dist: numpy==1.26.4
+Requires-Dist: pandas==2.2.3
+Requires-Dist: scipy==1.15.2
+Requires-Dist: scikit-learn==1.6.1
+Requires-Dist: scikit-image==0.25.2
+Requires-Dist: open-clip-torch==3.1.0
+Requires-Dist: albumentations==1.4.10
+Requires-Dist: opencv-python==4.11.0.86
+Requires-Dist: pillow==10.4.0
+Requires-Dist: tqdm
+Requires-Dist: wandb
+Requires-Dist: swanlab
+Requires-Dist: pydantic==2.10.6
+Requires-Dist: requests==2.32.3
+Requires-Dist: matplotlib==3.10.0
+Requires-Dist: aiohttp==3.11.13
+Requires-Dist: fastapi==0.115.11
+Requires-Dist: uvicorn==0.34.0
+Requires-Dist: einops==0.8.1
+Requires-Dist: nvidia-ml-py==12.570.86
+Requires-Dist: xformers
+Requires-Dist: absl-py
+Requires-Dist: sentencepiece
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0.0; extra == "dev"
 Requires-Dist: black>=23.0.0; extra == "dev"

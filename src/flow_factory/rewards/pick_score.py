@@ -4,7 +4,9 @@ import torch
 
 from .reward_model import BaseRewardModel, RewardModelOutput
 from ..hparams.reward_args import RewardArguments
+from .registry import register_reward_model
 
+@register_reward_model('PickScore')
 class PickScoreRewardModel(BaseRewardModel):
     def __init__(self, reward_args : RewardArguments):
         super().__init__(reward_args)

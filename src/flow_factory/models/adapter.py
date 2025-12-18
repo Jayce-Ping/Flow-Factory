@@ -7,10 +7,10 @@ from dataclasses import dataclass, field
 from PIL import Image
 from diffusers.utils.outputs import BaseOutput
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+from diffusers.models.modeling_utils import ModelMixin
 
 from ..scheduler.flow_matching import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput
-from ..hparams.training_args import TrainingArguments
-from ..hparams.model_args import ModelArguments
+from ..hparams import TrainingArguments, ModelArguments
 
 @dataclass
 class BaseSample(BaseOutput):
@@ -35,23 +35,19 @@ class BaseAdapter(nn.Module, ABC):
     """
     Abstract Base Class for Flow-Factory models.
     """
+    
+    pipeline: DiffusionPipeline
+    scheduler: FlowMatchEulerDiscreteSDEScheduler
+    transformer: Union[nn.Module, ModelMixin]
+
     def __init__(
             self,
-            model_args : ModelArguments,
+            model_args: ModelArguments,
             training_args: TrainingArguments
         ):
         super().__init__()
         self.model_args = model_args
         self.training_args = training_args
-        self.pipeline : DiffusionPipeline = DiffusionPipeline.from_pretrained(
-            model_args.model_name_or_path,
-        )
-        self.scheduler = FlowMatchEulerDiscreteSDEScheduler(
-            noise_level=training_args.noise_level,
-            noise_steps=training_args.noise_steps,
-            num_noise_steps=training_args.num_noise_steps,
-        )
-        self.pipeline.scheduler = self.scheduler
 
     def eval(self):
         """Set model to evaluation mode."""
@@ -64,6 +60,16 @@ class BaseAdapter(nn.Module, ABC):
         super().train(mode)
         if self.pipeline is not None:
             self.pipeline.train()
+
+    @property
+    def default_lora_target_modules(self) -> List[str]:
+        """Default target modules for LoRA adaptation."""
+        return []
+
+    @abstractmethod
+    def apply_lora(self):
+        """Apply LoRA adapters to the model if specified."""
+        pass
 
     @abstractmethod
     def load_checkpoint(self, path: str):

@@ -11,9 +11,7 @@ from diffusers.utils.outputs import BaseOutput
 from accelerate import Accelerator
 from accelerate.utils import set_seed, ProjectConfiguration
 
-from ..hparams.training_args import TrainingArguments
-from ..hparams.data_args import DataArguments
-from ..hparams.reward_args import RewardArguments
+from ..hparams import *
 from ..models.adapter import BaseAdapter
 from ..data_utils.loader import get_dataloader
 from ..rewards.reward_model import BaseRewardModel
@@ -25,19 +23,18 @@ class BaseTrainer(ABC):
     """
     def __init__(
             self,
-            data_args : DataArguments,
-            training_args : TrainingArguments,
-            reward_args : RewardArguments,
+            accelerator: Accelerator,
+            config : Arguments,
             adapter : BaseAdapter,
         ):
-        self.data_args = data_args
-        self.training_args = training_args
-        self.reward_args = reward_args
+        self.accelerator = accelerator
+        self.config = config
+        self.data_args = config.data_args
+        self.training_args = config.training_args
+        self.reward_args = config.reward_args
         self.adapter = adapter
 
-        self._init_accelerator()
-        # Offload text-encoder to save memory
-        self.adapter.off_load_text_encoder()
+        self._initialization()
     
     @abstractmethod
     def _init_reward_model(self) -> BaseRewardModel:
@@ -46,19 +43,24 @@ class BaseTrainer(ABC):
         pass
 
     def _init_dataloader(self) -> Tuple[DataLoader, Union[None, DataLoader]]:
+        # Move text-encoder & vae to GPU for dataloader encoding
+        self.adapter.on_load_text_encoder(self.accelerator.device)
+        self.adapter.on_load_vae(self.accelerator.device)
         dataloader, test_dataloader = get_dataloader(
             data_args=self.data_args,
             training_args=self.training_args,
             text_encode_func=self.adapter.encode_prompts,
             image_encode_func=self.adapter.encode_images,
         )
+        # Offload text-encoder after dataloader encoding
+        self.adapter.off_load_text_encoder()
+        self.adapter.off_load_vae()
         return dataloader, test_dataloader
     
     def _init_optimizer(self) -> torch.optim.Optimizer:
         """Initialize optimizer."""
-        transformer_trainable_parameters = self.adapter.get_trainable_parameters()
         self.optimizer = torch.optim.AdamW(
-            transformer_trainable_parameters,
+            self.adapter.get_trainable_parameters(),
             lr=self.training_args.learning_rate,
             betas=(self.training_args.adam_beta1, self.training_args.adam_beta2),
             weight_decay=self.training_args.adam_weight_decay,
@@ -66,19 +68,7 @@ class BaseTrainer(ABC):
         )
         return self.optimizer
 
-    def _init_accelerator(self):
-        accelerator_config = ProjectConfiguration(
-            project_dir=os.path.join(self.training_args.save_dir, self.training_args.run_name),
-            automatic_checkpoint_naming=True,
-        )
-
-        self.accelerator = Accelerator(
-            mixed_precision=self.training_args.mixed_precision,
-            project_config=accelerator_config,
-            gradient_accumulation_steps=self.training_args.gradient_accumulation_steps * self.training_args.num_timesteps,
-        )
-        set_seed(self.training_args.seed)
-
+    def _initialization(self):
         # Init dataloader and optimizer
         self.dataloader, self.test_dataloader = self._init_dataloader()
         self.optimizer = self._init_optimizer()

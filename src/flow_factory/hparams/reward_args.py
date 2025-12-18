@@ -1,11 +1,12 @@
 
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Type
 from logging import getLogger
 import torch
 import torch.distributed as dist
 
+from ..rewards.registry import get_reward_model_class
 
 logger = getLogger(__name__)
 
@@ -43,6 +44,8 @@ class RewardArguments:
         metadata={"help": "Batch size for reward model inference."},
     )
 
+    _reward_model_cls: Optional[Type] = field(init=False, repr=False, default=None)
+
     def __post_init__(self):
         # Convert dtype string to torch dtype
         dtype_map = {
@@ -56,20 +59,12 @@ class RewardArguments:
         self.torch_device = torch.device(self.device)
 
         # Parse reward model name/path
-        reward_model_mapping = {
-            # 'PickScore': 'flow_factory.rewards.pick_score.PickScoreRewardModel',
-        }
-        if self.reward_model in reward_model_mapping:
-            self.reward_model_cls = reward_model_mapping[self.reward_model]
-        else:
-            if ':' in self.reward_model:
-                path, class_name = self.reward_model.split(':')
-                module = __import__(path.replace('/', '.'), fromlist=[class_name])
-                self.reward_model_cls = getattr(module, class_name)
-            else:
-                raise ValueError(f"Unknown reward model: {self.reward_model}")
+        self._reward_model_cls = get_reward_model_class(self.reward_model)
 
-
+    @property
+    def reward_model_cls(self) -> Type:
+        """Access the loaded class safely."""
+        return self._reward_model_cls
         
 
     def to_dict(self) -> dict[str, Any]:

@@ -5,8 +5,7 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from .dataset import GeneralDataset
 from .sampler import DistributedKRepeatSampler
-from ..hparams.data_args import DataArguments
-from ..hparams.training_args import TrainingArguments
+from ..hparams import DataArguments, TrainingArguments
 from ..data_utils.dataset import TextEncodeCallable, ImageEncodeCallable
 
 def get_dataloader(
