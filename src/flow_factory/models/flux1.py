@@ -146,7 +146,7 @@ class Flux1Adapter(BaseAdapter):
         guidance_scale = guidance_scale or self.training_args.guidance_scale
         batch_size = prompt_embeds.shape[0] if prompt_embeds is not None else 1
         device = self.device
-        
+        dtype = prompt_embeds.dtype if prompt_embeds is not None else torch.float32
         # Encode prompts if not provided
         if prompt_embeds is None:
             encoded = self.encode_prompts(prompt)
@@ -160,16 +160,16 @@ class Flux1Adapter(BaseAdapter):
             )
         
         # Prepare latents
-        num_channels = self.pipeline.transformer.config.in_channels // 4
-        latents = self.pipeline.prepare_latents(
-            batch_size, num_channels, height, width,
-            prompt_embeds.dtype, device, generator,
+        num_channels_latents = self.pipeline.transformer.config.in_channels // 4
+        latents, image_ids = self.pipeline.prepare_latents(
+            batch_size = batch_size,
+            num_channels_latents = num_channels_latents,
+            height = height,
+            width = width,
+            dtype=dtype,
+            device=device,
+            generator=generator,
         )
-        
-        latent_image_ids = self.pipeline._prepare_latent_image_ids(
-            batch_size, height, width, device, prompt_embeds.dtype
-        )
-        latents = self.pipeline._pack_latents(latents, batch_size, num_channels, height, width)
         
         # Set timesteps with scheduler
         timesteps = set_scheduler_timesteps(
