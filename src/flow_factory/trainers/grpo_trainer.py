@@ -46,11 +46,15 @@ class GRPOTrainer(BaseTrainer):
             if (self.training_args.eval_args.eval_freq > 0 and self.epoch % self.training_args.eval_args.eval_freq == 0):
                 self.evaluate()
             
+            self.memory_profiler.snapshot(f"before_epoch_{self.epoch}_sampling")
             # Sample rollouts
             samples = self.sample()
+            self.memory_profiler.snapshot(f"after_epoch_{self.epoch}_sampling")
             
+            self.memory_profiler.snapshot(f"before_epoch_{self.epoch}_training")
             # Compute loss and update
             self.compute_loss(samples)
+            self.memory_profiler.snapshot(f"after_epoch_{self.epoch}_training")
             
             self.epoch += 1
 
@@ -117,7 +121,7 @@ class GRPOTrainer(BaseTrainer):
         return rewards
 
     def print_memory_breakdown(self):
-        """Prints the memory footprint of each model component in MB."""
+        """Prints the memory footprint of model components AND Optimizer."""
         components = {
             "Transformer": getattr(self.adapter.pipeline, "transformer", None),
             "VAE": getattr(self.adapter.pipeline, "vae", None),
@@ -126,27 +130,44 @@ class GRPOTrainer(BaseTrainer):
         }
 
         logger.info("=" * 40)
-        logger.info(f"GPU Memory Occupation (Weights & Buffers) on {self.accelerator.device}")
+        logger.info(f"GPU Memory Occupation on {self.accelerator.device}")
         
-        total_model_mem = 0
+        total_mem = 0
+        
+        # 1. Model Weights
         for name, module in components.items():
-            if module is None:
-                continue
-            
-            # Sum parameters and buffers
+            if module is None: continue
             mem_params = sum(p.nelement() * p.element_size() for p in module.parameters())
             mem_buffers = sum(b.nelement() * b.element_size() for b in module.buffers())
-            
             total_mb = (mem_params + mem_buffers) / 1024**2
-            total_model_mem += total_mb
             
-            # Check if it's actually on GPU
-            is_on_gpu = next(module.parameters()).is_cuda
+            # Check residency
+            is_on_gpu = False
+            try:
+                if len(list(module.parameters())) > 0:
+                    is_on_gpu = next(module.parameters()).is_cuda
+            except: pass
+            
             status = "(GPU)" if is_on_gpu else "(CPU/Offloaded)"
-            
             logger.info(f"{name:<15}: {total_mb:>8.2f} MB {status}")
+            if is_on_gpu: total_mem += total_mb
 
-        logger.info(f"{'Total Static':<15}: {total_model_mem:>8.2f} MB")
+        # 2. Optimizer State (The Missing Metric)
+        opt_mem = 0
+        if hasattr(self, 'optimizer') and self.optimizer is not None:
+            for state in self.optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor) and v.is_cuda:
+                        opt_mem += v.nelement() * v.element_size()
+        
+        opt_mb = opt_mem / 1024**2
+        logger.info(f"{'Optimizer':<15}: {opt_mb:>8.2f} MB (GPU)")
+        total_mem += opt_mb
+
+        logger.info("-" * 40)
+        logger.info(f"{'Total Tracked':<15}: {total_mem:>8.2f} MB")
+        logger.info(f"{'Torch Allocated':<15}: {torch.cuda.memory_allocated()/1024**2:>8.2f} MB")
+        logger.info(f"{'Torch Reserved':<15}: {torch.cuda.memory_reserved()/1024**2:>8.2f} MB")
         logger.info("=" * 40)
 
     def compute_loss(self, samples: List[BaseSample]) -> None:

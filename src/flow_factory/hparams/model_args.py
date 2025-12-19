@@ -37,7 +37,7 @@ class ModelArguments:
         metadata={"help": "Fine-tuning type. Options are ['full', 'lora']"}
     )
 
-    trainable_layers : Union[str, List[str]] = field(
+    target_modules : Union[str, List[str]] = field(
         default='all',
         metadata={"help": "Which layers to fine-tune. Options are like ['all',  'default', 'to_q']"}
     )
@@ -63,9 +63,9 @@ class ModelArguments:
     )
 
     def __post_init__(self):
-        if isinstance(self.trainable_layers, str):
-            if self.trainable_layers not in ['all', 'default']:
-                self.trainable_layers = [self.trainable_layers]
+        if isinstance(self.target_modules, str):
+            if self.target_modules not in ['all', 'default']:
+                self.target_modules = [self.target_modules]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

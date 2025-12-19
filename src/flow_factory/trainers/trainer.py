@@ -38,7 +38,10 @@ class BaseTrainer(ABC):
         self.epoch = 0
 
         self.memory_profiler = MemoryProfiler(self.accelerator, enable_tensor_accumulation=True, log_file='./memory_log.log')
+        self.memory_profiler.register_model(self.adapter.transformer, 'adapter_transformer')
+        self.memory_profiler.register_model(self.adapter.pipeline.text_encoder_2, 'adapter_text_encoder_2')
         self._initialization()
+        self.memory_profiler.snapshot("after_init")
 
     @property
     def transformer(self) -> nn.Module:

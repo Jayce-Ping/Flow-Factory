@@ -99,17 +99,17 @@ class Flux1Adapter(BaseAdapter):
             self.pipeline.transformer.requires_grad_(False)
             return
 
-        if self.model_args.trainable_layers == 'all':
+        if self.model_args.target_modules == 'all':
             logger.info("Unfreezing ALL transformer parameters.")
             self.pipeline.transformer.requires_grad_(True)
             return
 
-        if self.model_args.trainable_layers == 'default':
+        if self.model_args.target_modules == 'default':
             target_modules = self.default_target_modules
-        elif isinstance(self.model_args.trainable_layers, list):
-            target_modules = self.model_args.trainable_layers
+        elif isinstance(self.model_args.target_modules, list):
+            target_modules = self.model_args.target_modules
         else:
-            logger.warning(f"Invalid trainable_layers config: {self.model_args.trainable_layers}. Defaulting to frozen.")
+            logger.warning(f"Invalid trainable_layers config: {self.model_args.target_modules}. Defaulting to frozen.")
             target_modules = []
 
         logger.info(f"Freezing all layers except: {target_modules}")
