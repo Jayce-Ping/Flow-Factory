@@ -1,18 +1,28 @@
-
+# src/flow_factory/hparams/reward_args.py
+import os
 import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Optional, Type
 from logging import getLogger
 import torch
-import torch.distributed as dist
 
 from ..rewards.registry import get_reward_model_class
 
 logger = getLogger(__name__)
 
 def get_world_size() -> int:
-    if dist.is_initialized():
-        return dist.get_world_size()
+    # Standard PyTorch/Accelerate/DDP variable
+    if "WORLD_SIZE" in os.environ:
+        return int(os.environ["WORLD_SIZE"])
+    
+    # OpenMPI / Horovod
+    if "OMPI_COMM_WORLD_SIZE" in os.environ:
+        return int(os.environ["OMPI_COMM_WORLD_SIZE"])
+    
+    # Intel MPI / Slurm (sometimes)
+    if "PMI_SIZE" in os.environ:
+        return int(os.environ["PMI_SIZE"])
+    
     return 1
 
 @dataclass

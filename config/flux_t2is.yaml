@@ -11,9 +11,10 @@ data:
 
 # Model Configuration
 model:
+  finetune_type: 'full'
   model_name_or_path: "black-forest-labs/FLUX.1-dev"  # HuggingFace model ID or local path
-  model_type: "flux1"  # Options: sd3, flux1, flux1-kontext, flux2, qwenimage, qwenimage-edit
-  lora_path: null  # Path to LoRA weights (optional)
+  model_type: "flux1"  # Options: flux1, flux1-kontext, flux2, qwenimage, qwenimage-edit
+  resume_path: null # Path to load previous checkpoint/lora adapter
   save_path: null  # Path to save checkpoints (optional)
 
 # Training Configuration

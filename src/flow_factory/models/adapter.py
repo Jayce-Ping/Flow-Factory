@@ -1,16 +1,26 @@
 # src/flow_factory/models/adapter.py
+import os
+import json
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple, List, Union
+from dataclasses import dataclass, field
+import logging
+
 import torch
 import torch.nn as nn
-from dataclasses import dataclass, field
 from PIL import Image
+from safetensors.torch import save_file, load_file
 from diffusers.utils.outputs import BaseOutput
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.models.modeling_utils import ModelMixin
+from peft import get_peft_model, LoraConfig, PeftModel
+
 
 from ..scheduler.flow_matching import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput
 from ..hparams import *
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 @dataclass
 class BaseSample(BaseOutput):
@@ -39,8 +49,6 @@ class BaseAdapter(nn.Module, ABC):
     """
     
     pipeline: DiffusionPipeline
-    scheduler: FlowMatchEulerDiscreteSDEScheduler
-    transformer: Union[nn.Module, ModelMixin]
 
     def __init__(
             self,
@@ -51,6 +59,14 @@ class BaseAdapter(nn.Module, ABC):
         self.model_args = config.model_args
         self.training_args = config.training_args
 
+    @property
+    def transformer(self) -> torch.nn.Module:
+        return self.pipeline.transformer
+
+    @property
+    def scheduler(self) -> FlowMatchEulerDiscreteSDEScheduler:
+        return self.pipeline.scheduler
+    
     def eval(self):
         """Set model to evaluation mode."""
         super().eval()
@@ -64,20 +80,58 @@ class BaseAdapter(nn.Module, ABC):
         """Default target modules for LoRA adaptation."""
         return []
 
-    @abstractmethod
     def apply_lora(self):
         """Apply LoRA adapters to the model if specified."""
-        pass
+        lora_config = LoraConfig(
+            r=self.model_args.lora_rank,
+            lora_alpha=self.model_args.lora_alpha,
+            init_lora_weights="gaussian",
+            target_modules=self.default_lora_target_modules,
+        )
+        transformer = get_peft_model(self.pipeline.transformer, lora_config)
+        transformer.set_adapter("default")
+        self.pipeline.transformer = transformer
+        
+        return transformer
 
-    @abstractmethod
     def load_checkpoint(self, path: str):
-        """Load weights from a specific path (including LoRA adapters)."""
-        pass
+        """
+        Loads safetensors checkpoints. Detects if the path contains LoRA adapters,
+        a sharded full model, or a single safetensor file.
+        """
+        logger.info(f"Attempting to load checkpoint from {path}")
 
-    @abstractmethod
-    def save_checkpoint(self, path: str):
-        """Save weights to a specific path (including LoRA adapters)."""
-        pass
+        if self.model_args.finetune_type == 'lora':
+            logger.info("Detected LoRA checkpoint. Wrapping model...")
+            if not isinstance(self.transformer, PeftModel):
+                self.transformer = PeftModel.from_pretrained(self.transformer, path, is_trainable=True)
+            else:
+                self.transformer.load_adapter(path, self.transformer.active_adapter)
+            logger.info("LoRA adapter loaded successfully.")
+        else:
+            self.transformer.from_pretrained(path)
+            logger.info("Model weights loaded successfully from checkpoint.")
+
+        # Move model back to target device
+        self.on_load_transformer()
+
+    def save_checkpoint(self, path: str, transformer_override=None, max_shard_size: str = "5GB"):
+        """
+        Saves the transformer checkpoint using safetensors. 
+        Supports sharding for full-parameter tuning and native PEFT saving for LoRA.
+        """
+        model_to_save = transformer_override if transformer_override is not None else self.transformer
+        os.makedirs(path, exist_ok=True)
+
+        if self.model_args.finetune_type == 'lora' and isinstance(model_to_save, PeftModel):
+            logger.info(f"Saving LoRA adapter safetensors to {path}")
+            self.transformer.save_pretrained(path)
+        else:
+            logger.info(f"Preparing to save full-parameter shards to {path} (Max shard size: {max_shard_size})")
+            model_to_save.save_pretrained(path, max_shard_size=max_shard_size)
+
+        logger.info(f"Model shards saved successfully to {path}")
+        
 
     @abstractmethod
     def off_load_text_encoder(self):

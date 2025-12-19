@@ -37,12 +37,17 @@ class Flux1Adapter(BaseAdapter):
             noise_steps=self.training_args.noise_steps,
             num_noise_steps=self.training_args.num_noise_steps,
         )
-        
+
+        if self.config.model_args.resume_path:
+            self.load_checkpoint(self.config.model_args.resume_path)
+        elif self.config.model_args.finetune_type == 'lora':
+            self.apply_lora()
+
         # Freeze non-trainable components
         self._freeze_components()
 
     # ======================== Component Management ========================
-    
+
     @property
     def transformer(self) -> torch.nn.Module:
         return self.pipeline.transformer
@@ -321,27 +326,6 @@ class Flux1Adapter(BaseAdapter):
             "ff.net.0.proj", "ff.net.2",
             "ff_context.net.0.proj", "ff_context.net.2",
         ]
-    
-    def apply_lora(self):
-        """Apply LoRA adapters to the model if specified."""
-        from peft import get_peft_model, LoraConfig, PeftModel
-
-        if self.model_args.lora_path:
-            transformer = PeftModel.from_pretrained(self.pipeline.transformer, self.model_args.lora_path)
-            self.pipeline.transformer = transformer
-        else:
-            lora_config = LoraConfig(
-                r=self.model_args.lora_rank,
-                lora_alpha=self.model_args.lora_alpha,
-                init_lora_weights="gaussian",
-                target_modules=self.default_lora_target_modules,
-            )
-            transformer = get_peft_model(self.pipeline.transformer, lora_config)
-            transformer.set_adapter("default")
-            self.pipeline.transformer = transformer
-        
-        return transformer
-
 
     def enable_gradient_checkpointing(self):
         """Enable gradient checkpointing for memory efficiency."""
@@ -351,21 +335,6 @@ class Flux1Adapter(BaseAdapter):
     def get_trainable_parameters(self) -> List[torch.nn.Parameter]:
         """Get trainable parameters for optimizer."""
         return [p for p in self.pipeline.transformer.parameters() if p.requires_grad]
-    
-    def load_checkpoint(self, path: str):
-        """Load checkpoint."""
-        state_dict = torch.load(path, map_location=self.device)
-        self.pipeline.transformer.load_state_dict(state_dict, strict=False)
-    
-    def save_checkpoint(self, path: str):
-        """Save checkpoint."""
-        file_path = os.path.join(path, "diffusion_pytorch_model.bin")
-        
-        # It's better to get the state_dict from the unwrapped model if using LoRA/Accelerate
-        state_dict = self.pipeline.transformer.state_dict()
-        
-        torch.save(state_dict, file_path)
-        print(f"Checkpoint saved to {file_path}")
 
     @property
     def device(self) -> torch.device:

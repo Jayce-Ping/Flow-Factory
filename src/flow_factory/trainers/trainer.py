@@ -41,8 +41,8 @@ class BaseTrainer(ABC):
         return self.adapter.transformer
 
     @property
-    def unwrapped_adapter(self) -> BaseAdapter:
-        return self.accelerator.unwrap_model(self.adapter)
+    def unwrapped_transformer(self) -> BaseAdapter:
+        return self.accelerator.unwrap_model(self.adapter.transformer)
     
     def _init_reward_model(self) -> BaseRewardModel:
         """Initialize reward model from configuration."""
@@ -122,11 +122,11 @@ class BaseTrainer(ABC):
         """Save trainer state to a specific path."""
         if self.accelerator.is_main_process:
             os.makedirs(path, exist_ok=True)
-        # Wait for the directory to be created across all processes if necessary
+            self.adapter.save_checkpoint(path, transformer_override=self.unwrapped_transformer)
+
         self.accelerator.wait_for_everyone()
-        # The adapter now saves a file INSIDE this directory
-        self.adapter.save_checkpoint(path)
 
     def load_checkpoint(self, path: str):
         """Load trainer state from a specific path."""
         self.adapter.load_checkpoint(path)
+        self.accelerator.wait_for_everyone()
