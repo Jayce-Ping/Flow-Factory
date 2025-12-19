@@ -236,6 +236,8 @@ class TrainingArguments:
         if self.run_name is None:
             self.run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+        # Expand path to user's path
+        self.save_dir = os.path.expanduser(self.save_dir)
         # If save_dir does not exist, create it
         os.makedirs(self.save_dir, exist_ok=True)
 
