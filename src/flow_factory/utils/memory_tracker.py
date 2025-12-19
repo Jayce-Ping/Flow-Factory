@@ -59,7 +59,7 @@ class ModelMemoryTracker:
             'total_size_gb': (param_size + buffer_size) / 1024**3,
             'trainable_params': trainable_params,
             'total_params': total_params,
-            'trainable_ratio': trainable_params / total_params * 100,
+            'trainable_ratio': trainable_params / (total_params + 1e-8) * 100,
             'dtype_breakdown': dict(dtype_breakdown)
         }
         

@@ -120,8 +120,8 @@ class BaseTrainer(ABC):
         # Load Vae for image decoding
         self.adapter.on_load_vae(self.accelerator.device)
         self.memory_profiler.snapshot("after_vae_load")
-        
-        # Initialize reward model
+
+       # Initialize reward model
         self._init_reward_model()
         self.memory_profiler.snapshot("after_reward_model_init")
 

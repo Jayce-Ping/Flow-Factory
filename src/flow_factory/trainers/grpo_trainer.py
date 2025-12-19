@@ -102,6 +102,7 @@ class GRPOTrainer(BaseTrainer):
 
     def compute_rewards(self, samples: List[BaseSample]) -> torch.Tensor:
         """Compute rewards using the reward model."""
+        print(f"Reward Model Type: {type(self.reward_model)}")
         rewards = []
         
         signature = inspect.signature(self.reward_model.__call__)
@@ -160,57 +161,10 @@ class GRPOTrainer(BaseTrainer):
         
         return rewards
 
-    def print_memory_breakdown(self):
-        """Prints the memory footprint of model components AND Optimizer."""
-        components = {
-            "Transformer": getattr(self.adapter.pipeline, "transformer", None),
-            "VAE": getattr(self.adapter.pipeline, "vae", None),
-            "Text Encoder 1": getattr(self.adapter.pipeline, "text_encoder", None),
-            "Text Encoder 2": getattr(self.adapter.pipeline, "text_encoder_2", None),
-        }
+    def compute_advantages(self, samples: List[BaseSample]) -> torch.Tensor:
+        """Compute advantages for GRPO."""
 
-        logger.info("=" * 40)
-        logger.info(f"GPU Memory Occupation on {self.accelerator.device}")
-        
-        total_mem = 0
-        
-        for name, module in components.items():
-            if module is None: continue
-            mem_params = sum(p.nelement() * p.element_size() for p in module.parameters())
-            mem_buffers = sum(b.nelement() * b.element_size() for b in module.buffers())
-            total_mb = (mem_params + mem_buffers) / 1024**2
-            
-            is_on_gpu = False
-            try:
-                if len(list(module.parameters())) > 0:
-                    is_on_gpu = next(module.parameters()).is_cuda
-            except: pass
-            
-            status = "(GPU)" if is_on_gpu else "(CPU/Offloaded)"
-            logger.info(f"{name:<15}: {total_mb:>8.2f} MB {status}")
-            if is_on_gpu: total_mem += total_mb
-
-        opt_mem = 0
-        if hasattr(self, 'optimizer') and self.optimizer is not None:
-            for state in self.optimizer.state.values():
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor) and v.is_cuda:
-                        opt_mem += v.nelement() * v.element_size()
-        
-        opt_mb = opt_mem / 1024**2
-        logger.info(f"{'Optimizer':<15}: {opt_mb:>8.2f} MB (GPU)")
-        total_mem += opt_mb
-
-        logger.info("-" * 40)
-        logger.info(f"{'Total Tracked':<15}: {total_mem:>8.2f} MB")
-        logger.info(f"{'Torch Allocated':<15}: {torch.cuda.memory_allocated()/1024**2:>8.2f} MB")
-        logger.info(f"{'Torch Reserved':<15}: {torch.cuda.memory_reserved()/1024**2:>8.2f} MB")
-        logger.info("=" * 40)
-
-    def compute_loss(self, samples: List[BaseSample]) -> None:
-        """Main training loop: compute advantages and update policy."""
-        
-        # Compute rewards
+        # Compute rewards first
         rewards = self.compute_rewards(samples)
         prompt_ids = torch.stack([sample.prompt_ids for sample in samples], dim=0)
         prompt_ids = torch.as_tensor(prompt_ids, device=self.accelerator.device)
@@ -249,6 +203,12 @@ class GRPOTrainer(BaseTrainer):
             self.accelerator.num_processes, -1, *advantages.shape[1:]
         )[self.accelerator.process_index].to(self.accelerator.device)
 
+        return advantages
+
+    def compute_loss(self, samples: List[BaseSample]) -> None:
+        """Main training loop: compute loss and update policy."""
+
+        advantages = self.compute_advantages(samples)
         # Track advantages
         self.memory_profiler.track_tensors(
             {'advantages': advantages},
@@ -257,7 +217,6 @@ class GRPOTrainer(BaseTrainer):
 
         # Training loop
         self.adapter.train()
-        self.print_memory_breakdown()
 
         with self.accelerator.accumulate(self.adapter):
             batched_samples = [
