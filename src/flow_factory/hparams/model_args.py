@@ -2,7 +2,7 @@
 import os
 import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union, List
 import logging
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
@@ -37,6 +37,11 @@ class ModelArguments:
         metadata={"help": "Fine-tuning type. Options are ['full', 'lora']"}
     )
 
+    trainable_layers : Union[str, List[str]] = field(
+        default='all',
+        metadata={"help": "Which layers to fine-tune. Options are like ['all',  'default', 'to_q']"}
+    )
+
     resume_path : Optional[str] = field(
         default=None,
         metadata={"help": "Resume from checkpoint directory."}
@@ -58,7 +63,9 @@ class ModelArguments:
     )
 
     def __post_init__(self):
-        pass
+        if isinstance(self.trainable_layers, str):
+            if self.trainable_layers not in ['all', 'default']:
+                self.trainable_layers = [self.trainable_layers]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

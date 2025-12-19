@@ -13,6 +13,9 @@ from ..hparams import *
 from .adapter import BaseAdapter, BaseSample
 from ..scheduler.flow_matching import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput, set_scheduler_timesteps
 
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
+logger = logging.getLogger(__name__)
+
 @dataclass
 class Flux1Sample(BaseSample):
     """Output class for Flux Adapter models."""
@@ -28,9 +31,8 @@ class Flux1Adapter(BaseAdapter):
         # Load pipeline
         self.pipeline = FluxPipeline.from_pretrained(
             self.model_args.model_name_or_path,
-            torch_dtype=torch.bfloat16 if self.training_args.mixed_precision == "bf16" else torch.float16,
+            torch_dtype=torch.float16 if self.training_args.mixed_precision == "fp16" else torch.bfloat16,
         )
-        
         
         # Initialize Scheduler
         self.pipeline.scheduler = FlowMatchEulerDiscreteSDEScheduler(
@@ -77,13 +79,54 @@ class Flux1Adapter(BaseAdapter):
             self.pipeline.transformer.to(dtype=torch.float32)
         else:
             self.pipeline.transformer.to(dtype=inference_dtype)
-
+    
+    @property
+    def default_target_modules(self) -> List[str]:
+        return [
+            "attn.to_k", "attn.to_q", "attn.to_v", "attn.to_out.0",
+            "attn.add_k_proj", "attn.add_q_proj", "attn.add_v_proj", "attn.to_add_out",
+            "ff.net.0.proj", "ff.net.2",
+            "ff_context.net.0.proj", "ff_context.net.2",
+        ]
+    
     def _freeze_components(self):
         """Encapsulate freezing logic for cleanliness."""
         self.pipeline.vae.requires_grad_(False)
         self.pipeline.text_encoder.requires_grad_(False)
         self.pipeline.text_encoder_2.requires_grad_(False)
-        self.pipeline.transformer.requires_grad_(self.model_args.finetune_type == 'full')
+
+        if self.model_args.finetune_type == 'lora':
+            self.pipeline.transformer.requires_grad_(False)
+            return
+
+        if self.model_args.trainable_layers == 'all':
+            logger.info("Unfreezing ALL transformer parameters.")
+            self.pipeline.transformer.requires_grad_(True)
+            return
+
+        if self.model_args.trainable_layers == 'default':
+            target_modules = self.default_target_modules
+        elif isinstance(self.model_args.trainable_layers, list):
+            target_modules = self.model_args.trainable_layers
+        else:
+            logger.warning(f"Invalid trainable_layers config: {self.model_args.trainable_layers}. Defaulting to frozen.")
+            target_modules = []
+
+        logger.info(f"Freezing all layers except: {target_modules}")
+        
+        # First, freeze the entire transformer
+        self.pipeline.transformer.requires_grad_(False)
+        
+        # Then, unfreeze only the specific parameters that match
+        trainable_count = 0
+        for name, param in self.pipeline.transformer.named_parameters():
+            if any(target in name for target in target_modules):
+                param.requires_grad = True
+                trainable_count += 1
+        
+        if trainable_count == 0:
+            logger.warning("No parameters were unfrozen! Check your target_modules strings.")
+
 
     def off_load_text_encoder(self):
         self.pipeline.text_encoder.to("cpu")
@@ -340,15 +383,6 @@ class Flux1Adapter(BaseAdapter):
         """Set model to evaluation mode."""
         super().eval()
         self.pipeline.transformer.eval()
-
-    @property
-    def default_lora_target_modules(self) -> List[str]:
-        return [
-            "attn.to_k", "attn.to_q", "attn.to_v", "attn.to_out.0",
-            "attn.add_k_proj", "attn.add_q_proj", "attn.add_v_proj", "attn.to_add_out",
-            "ff.net.0.proj", "ff.net.2",
-            "ff_context.net.0.proj", "ff_context.net.2",
-        ]
 
     @property
     def device(self) -> torch.device:

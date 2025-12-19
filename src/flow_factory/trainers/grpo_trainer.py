@@ -6,6 +6,7 @@ Implements GRPO algorithm for flow matching models.
 import os
 from typing import List
 from functools import partial
+import inspect
 import logging
 import numpy as np
 import torch
@@ -15,7 +16,6 @@ tqdm = partial(tqdm_.tqdm, dynamic_ncols=True)
 from .trainer import BaseTrainer
 from ..models.adapter import BaseSample
 from ..rewards.reward_model import BaseRewardModel
-import inspect
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
 logger = logging.getLogger("flow_factory.train")

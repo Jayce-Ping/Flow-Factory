@@ -76,8 +76,8 @@ class BaseAdapter(nn.Module, ABC):
         super().train(mode)
 
     @property
-    def default_lora_target_modules(self) -> List[str]:
-        """Default target modules for LoRA adaptation."""
+    def default_target_modules(self) -> List[str]:
+        """Default target modules for training."""
         return []
 
     def apply_lora(self):
@@ -86,7 +86,7 @@ class BaseAdapter(nn.Module, ABC):
             r=self.model_args.lora_rank,
             lora_alpha=self.model_args.lora_alpha,
             init_lora_weights="gaussian",
-            target_modules=self.default_lora_target_modules,
+            target_modules=self.default_target_modules,
         )
         self.pipeline.transformer = get_peft_model(self.pipeline.transformer, lora_config)
         
@@ -131,7 +131,11 @@ class BaseAdapter(nn.Module, ABC):
             model_to_save.save_pretrained(path, max_shard_size=max_shard_size)
 
         logger.info(f"Model shards saved successfully to {path}")
-        
+    
+    @abstractmethod
+    def _freeze_components(self):
+        """Encapsulate freezing logic for cleanliness."""
+        pass
 
     @abstractmethod
     def off_load_text_encoder(self):
@@ -240,6 +244,9 @@ class BaseAdapter(nn.Module, ABC):
             module = getattr(self.pipeline, target_module)
             if hasattr(module, 'enable_gradient_checkpointing'):
                 module.enable_gradient_checkpointing()
+                logger.info(f"Enabled gradient checkpointing for {target_module}.")
+            else:
+                logger.warning(f"{target_module} does not support gradient checkpointing.")
     
     def get_trainable_parameters(self, target_module='transformer') -> List[torch.nn.Parameter]:
         """Returns generator for optimizer."""

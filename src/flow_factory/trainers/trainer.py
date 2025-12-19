@@ -16,6 +16,8 @@ from ..models.adapter import BaseAdapter
 from ..data_utils.loader import get_dataloader
 from ..rewards.reward_model import BaseRewardModel
 
+from ..utils.memory_tracker import MemoryProfiler
+
 
 class BaseTrainer(ABC):
     """
@@ -35,6 +37,7 @@ class BaseTrainer(ABC):
         self.adapter = adapter
         self.epoch = 0
 
+        self.memory_profiler = MemoryProfiler(self.accelerator, enable_tensor_accumulation=True, log_file='./memory_log.log')
         self._initialization()
 
     @property
@@ -83,8 +86,12 @@ class BaseTrainer(ABC):
 
     def _initialization(self):
         # Init dataloader and optimizer
+        self.memory_profiler.snapshot("before_optimizer_init")
         self.dataloader, self.test_dataloader = self._init_dataloader()
         self.optimizer = self._init_optimizer()
+        self.memory_profiler.track_optimizer(self.optimizer)
+        self.memory_profiler.snapshot("after_optimizer_init")
+        self.memory_profiler.snapshot("before_accelerator_prepare")
         # Prepare everything with accelerator
         # Here, `self.dataloader` is not prepared since it has been handled with DistributedKRepeatSampler
         if self.test_dataloader is not None:
@@ -98,11 +105,14 @@ class BaseTrainer(ABC):
                 self.adapter.transformer,
                 self.optimizer,
             )
+        self.memory_profiler.snapshot("after_accelerator_prepare")
         # Load Vae for image decoding
         self.adapter.on_load_vae(self.accelerator.device)
+        self.memory_profiler.snapshot("after_vae_load")
         
         # Initialize reward model
         self._init_reward_model()
+        self.memory_profiler.snapshot("after_reward_model_init")
 
     @abstractmethod
     def run(self):
