@@ -6,6 +6,7 @@ Implements GRPO algorithm for flow matching models.
 import os
 from typing import List
 from functools import partial
+import logging
 import numpy as np
 import torch
 import tqdm as tqdm_
@@ -15,6 +16,9 @@ from .trainer import BaseTrainer
 from ..models.adapter import BaseSample
 from ..rewards.reward_model import BaseRewardModel
 import inspect
+
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
+logger = logging.getLogger("flow_factory.train")
 
 class GRPOTrainer(BaseTrainer):
     """
@@ -112,6 +116,39 @@ class GRPOTrainer(BaseTrainer):
         rewards = torch.cat(rewards, dim=0)
         return rewards
 
+    def print_memory_breakdown(self):
+        """Prints the memory footprint of each model component in MB."""
+        components = {
+            "Transformer": getattr(self.adapter.pipeline, "transformer", None),
+            "VAE": getattr(self.adapter.pipeline, "vae", None),
+            "Text Encoder 1": getattr(self.adapter.pipeline, "text_encoder", None),
+            "Text Encoder 2": getattr(self.adapter.pipeline, "text_encoder_2", None),
+        }
+
+        logger.info("=" * 40)
+        logger.info(f"GPU Memory Occupation (Weights & Buffers) on {self.accelerator.device}")
+        
+        total_model_mem = 0
+        for name, module in components.items():
+            if module is None:
+                continue
+            
+            # Sum parameters and buffers
+            mem_params = sum(p.nelement() * p.element_size() for p in module.parameters())
+            mem_buffers = sum(b.nelement() * b.element_size() for b in module.buffers())
+            
+            total_mb = (mem_params + mem_buffers) / 1024**2
+            total_model_mem += total_mb
+            
+            # Check if it's actually on GPU
+            is_on_gpu = next(module.parameters()).is_cuda
+            status = "(GPU)" if is_on_gpu else "(CPU/Offloaded)"
+            
+            logger.info(f"{name:<15}: {total_mb:>8.2f} MB {status}")
+
+        logger.info(f"{'Total Static':<15}: {total_model_mem:>8.2f} MB")
+        logger.info("=" * 40)
+
     def compute_loss(self, samples: List[BaseSample]) -> None:
         """
         Main training loop: compute advantages and update policy.
@@ -161,6 +198,7 @@ class GRPOTrainer(BaseTrainer):
         print(f"Vae         Device: {self.adapter.pipeline.vae.device}, Dtype: {self.adapter.pipeline.vae.dtype}")
         print(f"Text_encoder Device: {self.adapter.pipeline.text_encoder.device}, Dtype: {self.adapter.pipeline.text_encoder.dtype}")
         print(f"Text_encoder_2 Device: {self.adapter.pipeline.text_encoder_2.device}, Dtype: {self.adapter.pipeline.text_encoder_2.dtype}")
+        self.print_memory_breakdown()
 
         with self.accelerator.accumulate(self.adapter):
             # Batch samples

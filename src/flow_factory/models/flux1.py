@@ -39,14 +39,14 @@ class Flux1Adapter(BaseAdapter):
             num_noise_steps=self.training_args.num_noise_steps,
         )
 
+        # Freeze non-trainable components
+        self._freeze_components()
+        self._mix_precision()
+
         if self.config.model_args.resume_path:
             self.load_checkpoint(self.config.model_args.resume_path)
         elif self.config.model_args.finetune_type == 'lora':
             self.apply_lora()
-
-        # Freeze non-trainable components
-        self._freeze_components()
-        self._mix_precision()
 
         if self.training_args.enable_gradient_checkpointing:
             self.enable_gradient_checkpointing()
@@ -349,15 +349,6 @@ class Flux1Adapter(BaseAdapter):
             "ff.net.0.proj", "ff.net.2",
             "ff_context.net.0.proj", "ff_context.net.2",
         ]
-
-    def enable_gradient_checkpointing(self):
-        """Enable gradient checkpointing for memory efficiency."""
-        if hasattr(self.pipeline.transformer, 'enable_gradient_checkpointing'):
-            self.pipeline.transformer.enable_gradient_checkpointing()
-    
-    def get_trainable_parameters(self) -> List[torch.nn.Parameter]:
-        """Get trainable parameters for optimizer."""
-        return [p for p in self.pipeline.transformer.parameters() if p.requires_grad]
 
     @property
     def device(self) -> torch.device:

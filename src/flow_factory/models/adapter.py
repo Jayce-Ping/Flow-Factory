@@ -88,11 +88,10 @@ class BaseAdapter(nn.Module, ABC):
             init_lora_weights="gaussian",
             target_modules=self.default_lora_target_modules,
         )
-        transformer = get_peft_model(self.pipeline.transformer, lora_config)
-        transformer.set_adapter("default")
-        self.pipeline.transformer = transformer
+        self.pipeline.transformer = get_peft_model(self.pipeline.transformer, lora_config)
         
-        return transformer
+        return self.pipeline.transformer
+
 
     def load_checkpoint(self, path: str):
         """
@@ -105,6 +104,7 @@ class BaseAdapter(nn.Module, ABC):
             logger.info("Detected LoRA checkpoint. Wrapping model...")
             if not isinstance(self.transformer, PeftModel):
                 self.transformer = PeftModel.from_pretrained(self.transformer, path, is_trainable=True)
+                self.transformer.set_adapter("default")
             else:
                 self.transformer.load_adapter(path, self.transformer.active_adapter)
             logger.info("LoRA adapter loaded successfully.")
@@ -234,12 +234,17 @@ class BaseAdapter(nn.Module, ABC):
         """
         pass
 
-    def enable_gradient_checkpointing(self):
+    def enable_gradient_checkpointing(self, target_module='transformer'):
         """Enable gradient checkpointing for memory efficiency."""
-        if hasattr(self.pipeline.transformer, 'enable_gradient_checkpointing'):
-            self.pipeline.transformer.enable_gradient_checkpointing()
+        if hasattr(self.pipeline, target_module):
+            module = getattr(self.pipeline, target_module)
+            if hasattr(module, 'enable_gradient_checkpointing'):
+                module.enable_gradient_checkpointing()
     
-    @abstractmethod
-    def get_trainable_parameters(self) -> List[torch.nn.Parameter]:
+    def get_trainable_parameters(self, target_module='transformer') -> List[torch.nn.Parameter]:
         """Returns generator for optimizer."""
-        pass
+        if hasattr(self.pipeline, target_module):
+            module = getattr(self.pipeline, target_module)
+            return list(filter(lambda p: p.requires_grad, module.parameters()))
+        else:
+            raise ValueError(f"Pipeline does not have module named {target_module}")
