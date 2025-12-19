@@ -50,7 +50,7 @@ class BaseRewardModel(ABC, nn.Module):
         self.accelerator = accelerator
         reward_args = config.reward_args
         self.reward_args = reward_args
-        self.device = reward_args.device
+        self.device = self.accelerator.device if reward_args.device == torch.device('cuda') else reward_args.device
         self.dtype = reward_args.dtype
 
     def __call__(self, *args, **kwargs):
@@ -63,8 +63,8 @@ class BaseRewardModel(ABC, nn.Module):
         # else:
         #     stage3_context = nullcontext
 
-        stage3_context = nullcontext()
-        with torch.no_grad(), stage3_context:
+        stage3_context = nullcontext
+        with torch.no_grad(), stage3_context():
             return super().__call__(*args, **kwargs)
 
     

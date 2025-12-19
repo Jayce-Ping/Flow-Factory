@@ -106,8 +106,6 @@ class GRPOTrainer(BaseTrainer):
         rewards = []
         
         filtered_key_fields = filter_kwargs(self.reward_model.forward, **samples[0])
-
-        print("Filtered key fields:", filtered_key_fields)
         
         for i in tqdm(
             range(0, len(samples), self.reward_args.batch_size),
@@ -203,7 +201,6 @@ class GRPOTrainer(BaseTrainer):
 
     def compute_loss(self, samples: List[BaseSample]) -> None:
         """Main training loop: compute loss and update policy."""
-        print("Sample", samples[0])
         advantages = self.compute_advantages(samples)
         # Track advantages
         self.memory_profiler.track_tensors(

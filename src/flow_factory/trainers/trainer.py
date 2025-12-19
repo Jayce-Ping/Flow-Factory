@@ -12,6 +12,7 @@ from diffusers.utils.outputs import BaseOutput
 from accelerate import Accelerator
 from accelerate.utils import set_seed, ProjectConfiguration
 
+
 from ..hparams import *
 from ..models.adapter import BaseAdapter
 from ..data_utils.loader import get_dataloader
@@ -61,6 +62,7 @@ class BaseTrainer(ABC):
         """Initialize reward model from configuration."""
         reward_model_cls = self.reward_args.reward_model_cls
         self.reward_model = reward_model_cls(config=self.config, accelerator=self.accelerator)
+        print(f"Rank {self.accelerator.device} loaded reward model on {self.reward_model.model.device}")
         return self.reward_model
 
     def _init_dataloader(self) -> Tuple[DataLoader, Union[None, DataLoader]]:
@@ -105,25 +107,23 @@ class BaseTrainer(ABC):
         self.memory_profiler.snapshot("before_accelerator_prepare")
         # Prepare everything with accelerator
         # Here, `self.dataloader` is not prepared since it has been handled with DistributedKRepeatSampler
-        if self.test_dataloader is not None:
-            self.adapter.transformer, self.optimizer, self.test_dataloader = self.accelerator.prepare(
-                self.adapter.transformer,
-                self.optimizer,
-                self.test_dataloader,
-            )
-        else:
-            self.adapter.transformer, self.optimizer = self.accelerator.prepare(
-                self.adapter.transformer,
-                self.optimizer,
-            )
+        to_prepare = [self.adapter.transformer, self.optimizer, self.test_dataloader]
+        to_prepare = [x for x in to_prepare if x is not None]
+        prepared = self.accelerator.prepare(*to_prepare)
+        self.adapter.transformer, self.optimizer = prepared[:2]
+        if len(prepared) > 2:
+            self.test_dataloader = prepared[2]
+
         self.memory_profiler.snapshot("after_accelerator_prepare")
         # Load Vae for image decoding
         self.adapter.on_load_vae(self.accelerator.device)
         self.memory_profiler.snapshot("after_vae_load")
-
-       # Initialize reward model
+        
+        # Initialize reward model
         self._init_reward_model()
         self.memory_profiler.snapshot("after_reward_model_init")
+
+        print(f"Reward model type:", type(self.reward_model.model), "Reward model device:", self.reward_model.model.device, self.reward_model.device)
 
     @abstractmethod
     def run(self):
