@@ -37,7 +37,7 @@ def load_trainer(
     """
     # Initialize Accelerator
     accelerator_config = ProjectConfiguration(
-        project_dir=os.path.join(config.training_args.save_dir, config.training_args.run_name),
+        project_dir=os.path.join(config.training_args.save_dir, config.run_name),
         automatic_checkpoint_naming=True,
     )
     accelerator = Accelerator(

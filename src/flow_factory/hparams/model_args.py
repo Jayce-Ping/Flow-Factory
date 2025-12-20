@@ -34,14 +34,14 @@ class ModelArguments(ArgABC):
         metadata={"help": "Fine-tuning type. Options are ['full', 'lora']"}
     )
 
-    master_weight_dtype : Union[Literal['fp32', 'bf16', 'fp16'], torch.dtype] = field(
-        default='bf16',
-        metadata={'help': ""}
+    master_weight_dtype : Union[Literal['fp32', 'bf16', 'fp16', 'float16', 'bfloat16', 'float32'], torch.dtype] = field(
+        default='float32',
+        metadata={'help': "The dtype of master weight for full-parameter traing."}
     )
 
     target_modules : Union[str, List[str]] = field(
         default='all',
-        metadata={"help": "Which layers to fine-tune. Options are like ['all',  'default', 'to_q']"}
+        metadata={"help": "Which layers to fine-tune. Options are like ['all',  'default', 'to_q', ['to_q', 'to_k', 'to_v']]"}
     )
 
     resume_path : Optional[str] = field(

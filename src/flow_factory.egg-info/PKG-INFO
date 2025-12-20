@@ -22,32 +22,24 @@ Requires-Dist: peft>=0.17.0
 Requires-Dist: datasets>=3.3.2
 Requires-Dist: tokenizers>=0.22.1
 Requires-Dist: huggingface-hub>=0.35.3
-Requires-Dist: deepspeed==0.15.4
-Requires-Dist: bitsandbytes>=0.45.3
-Requires-Dist: einops>=0.8.0
 Requires-Dist: protobuf>=6.33.2
 Requires-Dist: sentencepiece>=0.2.1
 Requires-Dist: numpy>=1.26.4
-Requires-Dist: pandas>=2.0.0
 Requires-Dist: pillow>=10.4.0
-Requires-Dist: scipy>=1.13.0
-Requires-Dist: scikit-learn>=1.5.0
-Requires-Dist: scikit-image>=0.24.0
-Requires-Dist: albumentations>=1.4.0
-Requires-Dist: opencv-python>=4.10.0
-Requires-Dist: tqdm
-Requires-Dist: wandb
-Requires-Dist: swanlab
+Requires-Dist: einops>=0.8.0
 Requires-Dist: pydantic>=2.8.0
 Requires-Dist: pyyaml>=6.0
-Requires-Dist: absl-py
-Requires-Dist: ml_collections
-Provides-Extra: dev
-Requires-Dist: pytest>=8.0.0; extra == "dev"
-Requires-Dist: black>=24.0.0; extra == "dev"
-Requires-Dist: isort>=5.13.0; extra == "dev"
-Requires-Dist: flake8>=7.0.0; extra == "dev"
-Requires-Dist: ipython; extra == "dev"
+Requires-Dist: tqdm
+Provides-Extra: deepspeed
+Requires-Dist: deepspeed<=0.17.4,==0.15.4; extra == "deepspeed"
+Provides-Extra: quantization
+Requires-Dist: bitsandbytes>=0.45.3; extra == "quantization"
+Provides-Extra: wandb
+Requires-Dist: wandb; extra == "wandb"
+Provides-Extra: swanlab
+Requires-Dist: swanlab; extra == "swanlab"
 Provides-Extra: nvidia
 Requires-Dist: xformers>=0.0.27; extra == "nvidia"
 Requires-Dist: nvidia-ml-py; extra == "nvidia"
+Provides-Extra: all
+Requires-Dist: flow-factory[deepspeed,quantization]; extra == "all"

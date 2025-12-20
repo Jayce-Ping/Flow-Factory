@@ -2,7 +2,7 @@
 import os
 import json
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, List, Union
+from typing import Dict, Any, Optional, Tuple, List, Union, Literal
 from dataclasses import dataclass, field, asdict
 import logging
 
@@ -67,6 +67,33 @@ class BaseAdapter(nn.Module, ABC):
         self.training_args = config.training_args
 
     @property
+    def text_encoders(self) -> List[torch.nn.Module]:
+        """Collect all text encoders from pipeline."""
+        encoders = []
+        for attr_name, attr_value in vars(self.pipeline).items():
+            if (
+                'text_encoder' in attr_name 
+                and not attr_name.startswith('_')  # Filter private attr
+                and isinstance(attr_value, torch.nn.Module)
+            ):
+                encoders.append((attr_name, attr_value))
+        
+        encoders.sort(key=lambda x: x[0])
+        return [enc for _, enc in encoders]
+
+    @property
+    def text_encoder(self) -> torch.nn.Module:
+        """Get the first text encoder."""
+        encoders = self.text_encoders
+        if len(encoders) == 0:
+            raise ValueError("No text encoder found in the pipeline.")
+        return encoders[0]
+
+    @property
+    def vae(self) -> torch.nn.Module:
+        return self.pipeline.vae
+    
+    @property
     def transformer(self) -> torch.nn.Module:
         return self.pipeline.transformer
 
@@ -86,6 +113,44 @@ class BaseAdapter(nn.Module, ABC):
     def default_target_modules(self) -> List[str]:
         """Default target modules for training."""
         return ['to_q', 'to_k', 'to_v', 'to_out.0']
+
+    @property
+    def _inference_dtype(self) -> torch.dtype:
+        """Get inference dtype based on mixed precision setting."""
+        if self.training_args.mixed_precision == "fp16":
+            return torch.float16
+        elif self.training_args.mixed_precision == "bf16":
+            return torch.bfloat16
+        return torch.float32
+
+    def _mix_precision(self):
+        """Apply mixed precision to all components."""
+        inference_dtype = self._inference_dtype
+        
+        # Text encoders and VAE always use inference dtype
+        for encoder in self.text_encoders:
+            encoder.to(dtype=inference_dtype)
+        self.vae.to(dtype=inference_dtype)
+        
+        # Transformer: inference dtype first (will be updated later for trainable params)
+        self.transformer.to(dtype=inference_dtype)
+
+    def _set_trainable_params_dtype(self):
+        """Set trainable parameters to master weight dtype."""
+        master_dtype = self.model_args.master_weight_dtype
+        inference_dtype = self._inference_dtype
+        
+        if master_dtype == inference_dtype:
+            return
+        
+        trainable_count = 0
+        for name, param in self.transformer.named_parameters():
+            if param.requires_grad:
+                param.data = param.data.to(dtype=master_dtype)
+                trainable_count += 1
+        
+        if trainable_count > 0:
+            logger.info(f"Set {trainable_count} trainable parameters to {master_dtype}")
 
     def apply_lora(self):
         """Apply LoRA adapters to the model if specified."""
@@ -154,20 +219,86 @@ class BaseAdapter(nn.Module, ABC):
         """Encapsulate freezing logic for cleanliness."""
         pass
 
-    @abstractmethod
+    def _freeze_text_encoders(self):
+        """Freeze all text encoders."""
+        for i, encoder in enumerate(self.text_encoders):
+            encoder.requires_grad_(False)
+
+    def _freeze_vae(self):
+        """Freeze VAE."""
+        self.vae.requires_grad_(False)
+
+    def _freeze_transformer(self, trainable_modules: Optional[Union[str, List[str]]] = None):
+        """
+        Freeze transformer with optional selective unfreezing.
+        
+        Args:
+            target_modules:
+                - 'all': Unfreeze all parameters
+                - 'default': Use self.default_target_modules
+                - List[str]: Custom module name patterns to unfreeze
+                - None / Empty list []: Freeze all (for LoRA)
+        """
+        if trainable_modules == 'all':
+            logger.info("Unfreezing ALL transformer parameters")
+            self.transformer.requires_grad_(True)
+            return
+        
+        if isinstance(trainable_modules, str):
+            if trainable_modules == 'default':
+                trainable_modules = self.default_target_modules
+            else:
+                trainable_modules = [trainable_modules]
+
+        # Freeze all first
+        self.transformer.requires_grad_(False)
+        
+        # Early return if no modules to unfreeze
+        if not trainable_modules:
+            logger.info("Froze ALL transformer parameters")
+            return
+        
+        # Selectively unfreeze
+        trainable_count = 0
+        for name, param in self.transformer.named_parameters():
+            if any(target in name for target in trainable_modules):
+                param.requires_grad = True
+                trainable_count += 1
+        
+        if trainable_count == 0:
+            logger.warning(f"No parameters matched target_modules: {trainable_modules}")
+        else:
+            logger.info(f"Unfroze {trainable_count} parameters in modules: {trainable_modules}")
+
+    def _freeze_components(self):
+        """
+        Default freeze strategy based on finetune_type and config.
+        Override in subclasses for custom logic.
+        """
+        # Always freeze text encoders and VAE
+        self._freeze_text_encoders()
+        self._freeze_vae()
+        
+        # Transformer freeze strategy
+        if self.model_args.finetune_type == 'lora':
+            self._freeze_transformer(trainable_modules=None)  # Freeze all for LoRA
+        elif self.model_args.target_modules == 'all':
+            self._freeze_transformer(trainable_modules='all')
+        else:
+            self._freeze_transformer(trainable_modules=self.model_args.target_modules)
+
     def off_load_text_encoder(self):
-        """Off-load text encoder to CPU to save GPU memory."""
-        pass
+        """Off-load all text encoders to CPU."""
+        for encoder in self.text_encoders:
+            encoder.to("cpu")
 
-    @abstractmethod
     def off_load_vae(self):
-        """Off-load VAE to CPU to save GPU memory."""
-        pass
+        """Off-load VAE to CPU."""
+        self.vae.to("cpu")
 
-    @abstractmethod
     def off_load_transformer(self):
-        """Off-load Transformer to CPU to save GPU memory."""
-        pass
+        """Off-load Transformer to CPU."""
+        self.transformer.to("cpu")
 
     def off_load(self):
         """Off-load all components to CPU."""
@@ -175,23 +306,25 @@ class BaseAdapter(nn.Module, ABC):
         self.off_load_vae()
         self.off_load_transformer()
 
-    @abstractmethod
-    def on_load_text_encoder(self, device: Union[torch.device, str] = torch.device("cuda" if torch.cuda.is_available() else "cpu")):
-        """Load text encoder back to specified device. Defaults to model device."""
-        pass
+    def on_load_text_encoder(self, device: Union[torch.device, str] = None):
+        """Load text encoders to device."""
+        device = device or self.device
+        for encoder in self.text_encoders:
+            encoder.to(device)
 
-    @abstractmethod
-    def on_load_vae(self, device: Union[torch.device, str] = torch.device("cuda" if torch.cuda.is_available() else "cpu")):
-        """Load VAE back to specified device. Defaults to model device."""
-        pass
+    def on_load_vae(self, device: Union[torch.device, str] = None):
+        """Load VAE to device."""
+        device = device or self.device
+        self.vae.to(device)
 
-    @abstractmethod
-    def on_load_transformer(self, device: Union[torch.device, str] = torch.device("cuda" if torch.cuda.is_available() else "cpu")):
-        """Load Transformer back to specified device. Defaults to model device."""
-        pass
+    def on_load_transformer(self, device: Union[torch.device, str] = None):
+        """Load Transformer to device."""
+        device = device or self.device
+        self.transformer.to(device)
 
-    def on_load(self, device: Union[torch.device, str] = torch.device("cuda" if torch.cuda.is_available() else "cpu")):
-        """Load all components back to specified device."""
+    def on_load(self, device: Union[torch.device, str] = None):
+        """Load all components to device."""
+        device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.on_load_text_encoder(device)
         self.on_load_vae(device)
         self.on_load_transformer(device)

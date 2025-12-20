@@ -22,14 +22,14 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 
-# Core Dependencies
+# Core
 dependencies = [
-    # --- Deep Learning Core ---
+    # Deep Learning Core
     "torch>=2.6.0",
     "torchvision>=0.19.0",
     "torchaudio>=2.4.0",
     
-    # --- Hugging Face Ecosystem ---
+    # Hugging Face Ecosystem
     "transformers>=4.57.1",
     "diffusers>=0.35.2",
     "accelerate>=1.11.0",
@@ -38,47 +38,41 @@ dependencies = [
     "tokenizers>=0.22.1",
     "huggingface-hub>=0.35.3",
 
-    # --- Optimization & Training ---
-    "deepspeed==0.15.4,<=0.17.4",      # For ZeRO stage optimization
-    "bitsandbytes>=0.45.3",   # For 8-bit/4-bit quantization
-    "einops>=0.8.0",
-    
-    # --- Critical Fixes for Flux/T5 ---
-    "protobuf>=6.33.2",       # REQUIRED for T5 serialization
-    "sentencepiece>=0.2.1",   # REQUIRED for T5 tokenizer
+    # Critical for T5/Flux
+    "protobuf>=6.33.2",
+    "sentencepiece>=0.2.1",
 
-    # --- Data Processing ---
+    # Basic Utils
     "numpy>=1.26.4",
-    "pandas>=2.0.0",
     "pillow>=10.4.0",
-    "scipy>=1.13.0",
-    "scikit-learn>=1.5.0",
-    "scikit-image>=0.24.0",
-    "albumentations>=1.4.0",
-    "opencv-python>=4.10.0",
-
-    # --- Logging & Utils ---
-    "tqdm",
-    "wandb",
-    "swanlab",
+    "einops>=0.8.0",
     "pydantic>=2.8.0",
     "pyyaml>=6.0",
-    "absl-py",
-    "ml_collections",
+    "tqdm",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0.0",
-    "black>=24.0.0",
-    "isort>=5.13.0",
-    "flake8>=7.0.0",
-    "ipython",
+# DeepSpeed (ZeRO optimization)
+deepspeed = [
+    "deepspeed==0.15.4,<=0.17.4",
 ]
-# For NVIDIA specific optimized kernels (optional as they can be tricky to install)
+
+# Quantization (8-bit/4-bit)
+quantization = [
+    "bitsandbytes>=0.45.3",
+]
+
+# Experiment tracking
+wandb = [ "wandb" ]
+swanlab = [ "swanlab" ]
+
 nvidia = [
     "xformers>=0.0.27",
     "nvidia-ml-py",
+]
+
+all = [
+    "flow-factory[deepspeed,quantization]",
 ]
 
 [project.scripts]

@@ -5,8 +5,9 @@ Supports loading from YAML files with nested structure.
 """
 from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 import yaml
+from datetime import datetime
 
 from .abc import ArgABC
 from .data_args import DataArguments
@@ -24,7 +25,7 @@ class Arguments(ArgABC):
     )
     config_file: str | None = field(
         default=None,
-        metadata={"help": "Path to distributed configuration file (e.g., deepspeed config)."},
+        metadata={"help": "Path to distributed configuration file (e.g., multi_gpu / deepspeed config)."},
     )
     num_processes : int = field(
         default=1,
@@ -33,6 +34,10 @@ class Arguments(ArgABC):
     main_process_port : int = field(
         default=29500,
         metadata={"help": "Main process port for distributed training."},
+    )
+    run_name : Optional[str] = field(
+        default=None,
+        metadata={"help": "Name of the training run. Defaults to a timestamp."},
     )
     data_args: DataArguments = field(
         default_factory=DataArguments,
@@ -50,6 +55,11 @@ class Arguments(ArgABC):
         default_factory=RewardArguments,
         metadata={"help": "Arguments for reward model configuration."},
     )
+
+    def __post_init__(self):
+        if self.run_name is None:
+            time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.run_name = f"{self.model_args.model_type}_{self.model_args.finetune_type}_{time_stamp}"
     
 
     def to_dict(self) -> dict[str, Any]:

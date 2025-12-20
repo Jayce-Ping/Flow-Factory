@@ -43,42 +43,19 @@ class Flux1Adapter(BaseAdapter):
 
         # Freeze non-trainable components
         self._freeze_components()
-        self._mix_precision()
 
         if self.config.model_args.resume_path:
             self.load_checkpoint(self.config.model_args.resume_path)
         elif self.config.model_args.finetune_type == 'lora':
             self.apply_lora()
 
+        self._mix_precision()
+        self._set_trainable_params_dtype()
+
         if self.training_args.enable_gradient_checkpointing:
             self.enable_gradient_checkpointing()
 
-    # ======================== Component Management ========================
-
-    @property
-    def transformer(self) -> torch.nn.Module:
-        return self.pipeline.transformer
-
-    @property
-    def scheduler(self) -> FlowMatchEulerDiscreteSDEScheduler:
-        return self.pipeline.scheduler
-
-    def _mix_precision(self):
-        """Handle mixed precision settings."""
-        if self.training_args.mixed_precision == "fp16":
-            inference_dtype = torch.float16
-        elif self.training_args.mixed_precision == "bf16":
-            inference_dtype = torch.bfloat16
-        else:
-            inference_dtype = torch.float32
-        
-        self.pipeline.text_encoder.to(dtype=inference_dtype)
-        self.pipeline.text_encoder_2.to(dtype=inference_dtype)
-        self.pipeline.vae.to(dtype=inference_dtype)
-        if self.config.model_args.finetune_type == 'full':
-            self.pipeline.transformer.to(dtype=self.config.model_args.master_weight_dtype)
-        else:
-            self.pipeline.transformer.to(dtype=inference_dtype)
+        self.log_trainable_parameters()
     
     @property
     def default_target_modules(self) -> List[str]:
@@ -88,68 +65,6 @@ class Flux1Adapter(BaseAdapter):
             "ff.net.0.proj", "ff.net.2",
             "ff_context.net.0.proj", "ff_context.net.2",
         ]
-    
-    def _freeze_components(self):
-        """Encapsulate freezing logic for cleanliness."""
-        self.pipeline.vae.requires_grad_(False)
-        self.pipeline.text_encoder.requires_grad_(False)
-        self.pipeline.text_encoder_2.requires_grad_(False)
-
-        if self.model_args.finetune_type == 'lora':
-            self.pipeline.transformer.requires_grad_(False)
-            return
-
-        if self.model_args.target_modules == 'all':
-            logger.info("Unfreezing ALL transformer parameters.")
-            self.pipeline.transformer.requires_grad_(True)
-            return
-
-        if self.model_args.target_modules == 'default':
-            target_modules = self.default_target_modules
-        elif isinstance(self.model_args.target_modules, list):
-            target_modules = self.model_args.target_modules
-        else:
-            logger.warning(f"Invalid trainable_layers config: {self.model_args.target_modules}. Defaulting to frozen.")
-            target_modules = []
-
-        logger.info(f"Freezing all layers except: {target_modules}")
-        
-        # First, freeze the entire transformer
-        self.pipeline.transformer.requires_grad_(False)
-        
-        # Then, unfreeze only the specific parameters that match
-        trainable_count = 0
-        for name, param in self.pipeline.transformer.named_parameters():
-            if any(target in name for target in target_modules):
-                param.requires_grad = True
-                trainable_count += 1
-        
-        if trainable_count == 0:
-            logger.warning("No parameters were unfrozen! Check your target_modules strings.")
-
-
-    def off_load_text_encoder(self):
-        self.pipeline.text_encoder.to("cpu")
-        self.pipeline.text_encoder_2.to("cpu")
-
-    def off_load_vae(self):
-        self.pipeline.vae.to("cpu")
-
-    def off_load_transformer(self):
-        self.pipeline.transformer.to("cpu")
-
-    def on_load_text_encoder(self, device: Union[torch.device, str] = None):
-        device = device or self.device
-        self.pipeline.text_encoder.to(device)
-        self.pipeline.text_encoder_2.to(device)
-
-    def on_load_vae(self, device: Union[torch.device, str] = None):
-        device = device or self.device
-        self.pipeline.vae.to(device)
-
-    def on_load_transformer(self, device: Union[torch.device, str] = None):
-        device = device or self.device
-        self.pipeline.transformer.to(device)
 
     # ======================== Encoding & Decoding ========================
     
@@ -388,3 +303,34 @@ class Flux1Adapter(BaseAdapter):
     def device(self) -> torch.device:
         """Get model device."""
         return self.pipeline.transformer.device
+
+    def log_trainable_parameters(self):
+        """Log trainable parameter statistics for transformer."""
+        total_params = 0
+        trainable_params = 0
+        total_size_bytes = 0
+        trainable_size_bytes = 0
+        
+        for param in self.transformer.parameters():
+            param_count = param.numel()
+            param_size = param.element_size() * param_count  # bytes
+            
+            total_params += param_count
+            total_size_bytes += param_size
+            
+            if param.requires_grad:
+                trainable_params += param_count
+                trainable_size_bytes += param_size
+        
+        # Convert to GB
+        total_size_gb = total_size_bytes / (1024 ** 3)
+        trainable_size_gb = trainable_size_bytes / (1024 ** 3)
+        
+        trainable_percentage = 100 * trainable_params / total_params if total_params > 0 else 0
+        
+        logger.info("=" * 70)
+        logger.info("Transformer Trainable Parameters:")
+        logger.info(f"  Total parameters:      {total_params:>15,d} ({total_size_gb:>6.2f} GB)")
+        logger.info(f"  Trainable parameters:  {trainable_params:>15,d} ({trainable_size_gb:>6.2f} GB)")
+        logger.info(f"  Trainable percentage:  {trainable_percentage:>14.2f}%")
+        logger.info("=" * 70)
