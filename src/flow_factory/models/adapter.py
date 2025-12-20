@@ -212,7 +212,7 @@ class BaseAdapter(nn.Module, ABC):
             self.ema_wrapper = EMAModuleWrapper(
                 parameters=self.get_trainable_parameters(target_module='transformer'),
                 decay=self.training_args.ema_decay,
-                update_step_interval=self.training_args.ema_update_step_interval,
+                update_step_interval=self.training_args.ema_update_interval,
                 device=self.device,
             )
         else:

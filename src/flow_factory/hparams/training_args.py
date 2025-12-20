@@ -161,13 +161,9 @@ class TrainingArguments:
         metadata={"help": "Weight decay for AdamW optimizer."},
     )
 
-    adam_beta1: float = field(
-        default=0.9,
-        metadata={"help": "Beta1 for AdamW optimizer."},
-    )
-    adam_beta2: float = field(
-        default=0.999,
-        metadata={"help": "Beta2 for AdamW optimizer."},
+    adam_betas: tuple[float, float] = field(
+        default=(0.9, 0.999),
+        metadata={"help": "Betas for AdamW optimizer."},
     )
     adam_epsilon: float = field(
         default=1e-8,
@@ -184,7 +180,7 @@ class TrainingArguments:
         metadata={"help": "Decay for EMA model. Set to 0 to disable EMA."},
     )
 
-    ema_update_step_interval: int = field(
+    ema_update_interval: int = field(
         default=10,
         metadata={"help": "Update EMA every N steps."},
     )
@@ -228,6 +224,8 @@ class TrainingArguments:
 
         self.num_batches_per_epoch = (self.unique_sample_num_per_epoch * self.group_size) // sample_num_per_iteration
         self.gradient_accumulation_steps = max(1, self.num_batches_per_epoch // self.gradient_step_per_epoch)
+
+        self.adam_betas = tuple(self.adam_betas)
 
         if isinstance(self.resolution, int):
             self.resolution = (self.resolution, self.resolution)

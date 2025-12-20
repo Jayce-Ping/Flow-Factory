@@ -87,7 +87,7 @@ class BaseTrainer(ABC):
         self.optimizer = torch.optim.AdamW(
             self.adapter.get_trainable_parameters(),
             lr=self.training_args.learning_rate,
-            betas=(self.training_args.adam_beta1, self.training_args.adam_beta2),
+            betas=self.training_args.adam_betas,
             weight_decay=self.training_args.adam_weight_decay,
             eps=self.training_args.adam_epsilon,
         )
