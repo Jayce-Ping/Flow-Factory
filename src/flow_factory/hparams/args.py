@@ -88,7 +88,8 @@ class Arguments(ArgABC):
     @classmethod
     def from_dict(cls, args_dict: dict[str, Any]) -> Arguments:
         """Create Arguments instance from dictionary."""
-        # Extract nested configs
+        
+        # 1. Nested arguments
         nested_args = {
             'data_args': DataArguments(**args_dict.get('data', {})),
             'model_args': ModelArguments(**args_dict.get('model', {})),
@@ -96,9 +97,20 @@ class Arguments(ArgABC):
             'reward_args': RewardArguments(**args_dict.get('reward', {})),
         }
         
-        # Extract top-level configs (exclude nested keys)
-        top_level_keys = {'launcher', 'config_file', 'num_processes', 'main_process_port'}
-        top_level_args = {k: v for k, v in args_dict.items() if k in top_level_keys}
+        # 2. Automatically get all dataclass field names
+        # fields(cls) returns all field objects defined in the class
+        valid_field_names = {f.name for f in fields(cls)}
+        
+        # 3. Exclude nested fields that have been manually handled
+        # This prevents duplicate or conflicting arguments
+        target_keys = valid_field_names - nested_args.keys()
+        
+        # 4. Automatically filter top_level_args
+        # Logic: iterate over the input dictionary, keep keys that exist in the class definition and are not nested parameters
+        top_level_args = {
+            k: v for k, v in args_dict.items() 
+            if k in target_keys
+        }
         
         return cls(**top_level_args, **nested_args)
 
