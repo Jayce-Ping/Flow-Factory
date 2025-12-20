@@ -66,7 +66,7 @@ class Flux1Adapter(BaseAdapter):
 
     # ======================== Encoding & Decoding ========================
     
-    def encode_prompts(self, prompt: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
+    def encode_prompt(self, prompt: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """Encode text prompts using the pipeline's text encoder."""
 
         execution_device = self.pipeline.text_encoder.device
@@ -91,7 +91,7 @@ class Flux1Adapter(BaseAdapter):
             'pooled_prompt_embeds': pooled_prompt_embeds,
         }
     
-    def encode_images(self, images: Union[torch.Tensor, List[torch.Tensor]], **kwargs) -> torch.Tensor:
+    def encode_image(self, image: Union[torch.Tensor, List[torch.Tensor]], **kwargs) -> torch.Tensor:
         """Not needed for FLUX text-to-image models."""
         pass
 
@@ -136,7 +136,7 @@ class Flux1Adapter(BaseAdapter):
         dtype = prompt_embeds.dtype if prompt_embeds is not None else torch.float32
         # Encode prompts if not provided
         if prompt_embeds is None:
-            encoded = self.encode_prompts(prompt)
+            encoded = self.encode_prompt(prompt)
             prompt_embeds = encoded['prompt_embeds']
             pooled_prompt_embeds = encoded['pooled_prompt_embeds']
             prompt_ids = encoded['prompt_ids']

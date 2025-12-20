@@ -444,7 +444,7 @@ class BaseAdapter(nn.Module, ABC):
         self.on_load_transformer(device)
 
     @abstractmethod
-    def encode_prompts(
+    def encode_prompt(
         self,
         prompts: Union[str, List[str]],
         **kwargs,
@@ -455,7 +455,7 @@ class BaseAdapter(nn.Module, ABC):
         pass
 
     @abstractmethod
-    def encode_images(
+    def encode_image(
         self,
         images: Union[Image.Image, List[Image.Image]],
         **kwargs,

@@ -73,8 +73,8 @@ class BaseTrainer(ABC):
             dataloader, test_dataloader = get_dataloader(
                 data_args=self.data_args,
                 training_args=self.training_args,
-                text_encode_func=self.adapter.encode_prompts,
-                image_encode_func=self.adapter.encode_images,
+                text_encode_func=self.adapter.encode_prompt,
+                image_encode_func=self.adapter.encode_image,
             )
             # Offload text-encoder after dataloader encoding
             if self.accelerator.is_local_main_process:

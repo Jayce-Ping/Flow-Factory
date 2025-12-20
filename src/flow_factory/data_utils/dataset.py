@@ -11,11 +11,11 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%
 logger = logging.getLogger(__name__)
 
 class TextEncodeCallable(Protocol):
-    def __call__(self, texts: Union[str, List[str]], **kwargs: Any) -> Dict[str, Any]:
+    def __call__(self, prompt: Union[str, List[str]], **kwargs: Any) -> Dict[str, Any]:
         ...
 
 class ImageEncodeCallable(Protocol):
-    def __call__(self, images: Union[Image.Image, List[Image.Image]], **kwargs: Any) -> Dict[str, Any]:
+    def __call__(self, image: Union[Image.Image, List[Image.Image]], **kwargs: Any) -> Dict[str, Any]:
         ...
 
 class GeneralDataset(Dataset):
@@ -82,13 +82,13 @@ class GeneralDataset(Dataset):
 
     def _preprocess_batch(self, batch: Dict[str, Any], image_dir: str) -> Dict[str, Any]:
         
-        prompts = batch["prompt"]
-        negative_prompts = batch.get("negative_prompt", None)
-        img_paths_list = batch.get("images", [[] for _ in range(len(prompts))])
+        prompt = batch["prompt"]
+        negative_prompt = batch.get("negative_prompt", None)
+        img_paths_list = batch.get("images", [[] for _ in range(len(prompt))])
         
         # 1. Process Text
-        assert self._text_encode_func is not None, "Text encode function must be provided to process prompts."
-        prompt_args = {'prompt': prompts} if negative_prompts is None else {'prompt': prompts, 'negative_prompt': negative_prompts}
+        assert self._text_encode_func is not None, "Text encode function must be provided to process prompt."
+        prompt_args = {'prompt': prompt} if negative_prompt is None else {'prompt': prompt, 'negative_prompt': negative_prompt}
         prompt_res = self._text_encode_func(**prompt_args)
         
         # 2. Process Images
@@ -96,13 +96,13 @@ class GeneralDataset(Dataset):
         collated_image_res = defaultdict(list)
 
         for img_paths in img_paths_list:
-            images = []
+            image = []
             for img_path in img_paths:
                 with Image.open(os.path.join(image_dir, img_path)) as img:
-                    images.append(img.convert("RGB"))
-            if len(images) > 0:
-                assert self._image_encode_func is not None, "Image encode function must be provided to process images."
-                encoded_single_sample = self._image_encode_func(images, **image_args)
+                    image.append(img.convert("RGB"))
+            if len(image) > 0:
+                assert self._image_encode_func is not None, "Image encode function must be provided to process image."
+                encoded_single_sample = self._image_encode_func(image, **image_args)
                 for k, v in encoded_single_sample.items():
                     collated_image_res[k].append(v)
 
