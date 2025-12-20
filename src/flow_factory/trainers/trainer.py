@@ -62,7 +62,6 @@ class BaseTrainer(ABC):
         """Initialize reward model from configuration."""
         reward_model_cls = self.reward_args.reward_model_cls
         self.reward_model = reward_model_cls(config=self.config, accelerator=self.accelerator)
-        print(f"Rank {self.accelerator.device} loaded reward model on {self.reward_model.model.device}")
         return self.reward_model
 
     def _init_dataloader(self) -> Tuple[DataLoader, Union[None, DataLoader]]:
@@ -122,8 +121,6 @@ class BaseTrainer(ABC):
         # Initialize reward model
         self._init_reward_model()
         self.memory_profiler.snapshot("after_reward_model_init")
-
-        print(f"Reward model type:", type(self.reward_model.model), "Reward model device:", self.reward_model.model.device, self.reward_model.device)
 
     @abstractmethod
     def run(self):

@@ -324,7 +324,8 @@ class GRPOTrainer(BaseTrainer):
             disable=not self.accelerator.is_local_main_process,
         ):
             with torch.no_grad():
-                samples = self.adapter.inference(**batch, compute_log_probs=False)
+                with self.autocast():
+                    samples = self.adapter.inference(**batch, compute_log_probs=False)
             all_samples.extend(samples)
         
         # Compute rewards

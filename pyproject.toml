@@ -39,7 +39,7 @@ dependencies = [
     "huggingface-hub>=0.35.3",
 
     # --- Optimization & Training ---
-    "deepspeed==0.17.4",      # For ZeRO stage optimization
+    "deepspeed==0.15.4,<=0.17.4",      # For ZeRO stage optimization
     "bitsandbytes>=0.45.3",   # For 8-bit/4-bit quantization
     "einops>=0.8.0",
     

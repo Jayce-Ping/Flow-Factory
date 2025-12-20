@@ -1,4 +1,5 @@
 # src/flow_factory/data/loader.py
+import os
 from typing import Union, Tuple, Optional
 import torch
 import torch.distributed as dist
@@ -7,6 +8,8 @@ from .dataset import GeneralDataset
 from .sampler import DistributedKRepeatSampler
 from ..hparams import *
 from ..data_utils.dataset import TextEncodeCallable, ImageEncodeCallable
+
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 def get_dataloader(
     data_args : DataArguments,

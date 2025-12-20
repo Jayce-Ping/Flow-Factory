@@ -16,7 +16,6 @@ from contextlib import nullcontext
 from accelerate import Accelerator
 from diffusers.utils.outputs import BaseOutput
 from ..hparams import *
-from deepspeed.runtime.zero.partition_parameters import GatheredParameters
 
 @dataclass
 class RewardModelOutput(BaseOutput):
@@ -55,16 +54,9 @@ class BaseRewardModel(ABC, nn.Module):
 
     def __call__(self, *args, **kwargs):
         """
-        Wraps `forward` to automatically handle `torch.no_grad` and DeepSpeed ZeRO-3 parameter gathering.
+        Wraps `forward` to automatically handle `torch.no_grad` and other contexts.
         """
-        # if self.accelerator.state.deepspeed_plugin and self.accelerator.state.deepspeed_plugin.zero_stage == 3:
-        #     # Bind self.model dynamically
-        #     stage3_context = lambda: GatheredParameters(self.model.parameters(), modifier_rank=0)
-        # else:
-        #     stage3_context = nullcontext
-
-        stage3_context = nullcontext
-        with torch.no_grad(), stage3_context():
+        with torch.no_grad():
             return super().__call__(*args, **kwargs)
 
     

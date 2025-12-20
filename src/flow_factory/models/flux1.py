@@ -76,7 +76,7 @@ class Flux1Adapter(BaseAdapter):
         self.pipeline.text_encoder_2.to(dtype=inference_dtype)
         self.pipeline.vae.to(dtype=inference_dtype)
         if self.config.model_args.finetune_type == 'full':
-            self.pipeline.transformer.to(dtype=torch.float32)
+            self.pipeline.transformer.to(dtype=self.config.model_args.master_weight_dtype)
         else:
             self.pipeline.transformer.to(dtype=inference_dtype)
     

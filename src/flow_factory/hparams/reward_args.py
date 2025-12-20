@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 dtype_map = {
+    'fp16': torch.float16,
+    'bf16': torch.bfloat16,    
+    'fp32': torch.float32,
     'float16': torch.float16,
     'bfloat16': torch.bfloat16,
     'float32': torch.float32,

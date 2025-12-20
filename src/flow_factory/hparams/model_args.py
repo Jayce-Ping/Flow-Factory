@@ -7,11 +7,21 @@ from typing import Any, Literal, Optional, Union, List
 from .abc import ArgABC
 import logging
 
+import torch
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
 logger = logging.getLogger(__name__)
 
+dtype_map = {
+    'fp16': torch.float16,
+    'bf16': torch.bfloat16,    
+    'fp32': torch.float32,
+    'float16': torch.float16,
+    'bfloat16': torch.bfloat16,
+    'float32': torch.float32,
+}
+
 @dataclass
-class ModelArguments:
+class ModelArguments(ArgABC):
     r"""Arguments pertaining to model configuration."""
 
     model_name_or_path: str = field(
@@ -22,6 +32,11 @@ class ModelArguments:
     finetune_type : Literal['full', 'lora'] = field(
         default='full',
         metadata={"help": "Fine-tuning type. Options are ['full', 'lora']"}
+    )
+
+    master_weight_dtype : Union[Literal['fp32', 'bf16', 'fp16'], torch.dtype] = field(
+        default='bf16',
+        metadata={'help': ""}
     )
 
     target_modules : Union[str, List[str]] = field(
@@ -49,13 +64,18 @@ class ModelArguments:
         metadata={"help": "Alpha scaling factor for LoRA adapters."},
     )
 
-    def __post_init__(self):
+    def __post_init__(self):        
+        if isinstance(self.master_weight_dtype, str):
+            self.master_weight_dtype = dtype_map[self.master_weight_dtype]
+
         if isinstance(self.target_modules, str):
             if self.target_modules not in ['all', 'default']:
                 self.target_modules = [self.target_modules]
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d['master_weight_dtype'] = str(self.master_weight_dtype).split('.')[-1]
+        return d
 
     def __str__(self) -> str:
         """Pretty print configuration as YAML."""

@@ -85,7 +85,7 @@ class BaseAdapter(nn.Module, ABC):
     @property
     def default_target_modules(self) -> List[str]:
         """Default target modules for training."""
-        return []
+        return ['to_q', 'to_k', 'to_v', 'to_out.0']
 
     def apply_lora(self):
         """Apply LoRA adapters to the model if specified."""
