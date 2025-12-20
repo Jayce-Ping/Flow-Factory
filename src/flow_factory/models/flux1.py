@@ -280,7 +280,6 @@ class Flux1Adapter(BaseAdapter):
             sample=latents,
             prev_sample=next_latents,
             return_log_prob=return_log_prob,
-            sde_type=self.training_args.sde_type,
         )
         
         return output
