@@ -139,28 +139,31 @@ class BaseAdapter(nn.Module, ABC):
     def device(self) -> torch.device:
         return self.transformer.device
     
-    def eval(self):
+    def eval(self, transformer_only: bool=True):
         """Set model to evaluation mode."""
         super().eval()
         
-        # Set all components to eval mode
-        for encoder in self.text_encoders:
-            encoder.eval()
-        self.vae.eval()
+        if transformer_only:
+            # Set all components to eval mode
+            for encoder in self.text_encoders:
+                encoder.eval()
+            self.vae.eval()
 
         self.transformer.eval()
 
         if hasattr(self.scheduler, 'eval'):
             self.scheduler.eval()
 
-    def train(self, mode: bool = True):
+    def train(self, mode: bool = True, transformer_only: bool = True):
         """Set model to training mode."""
         super().train(mode)
         
         # Set all components to training mode
-        for encoder in self.text_encoders:
-            encoder.train(mode)
-        self.vae.train(mode)
+        if transformer_only:
+            for encoder in self.text_encoders:
+                encoder.train(mode)
+            self.vae.train(mode)
+
         self.transformer.train(mode)
 
         if hasattr(self.scheduler, 'train'):

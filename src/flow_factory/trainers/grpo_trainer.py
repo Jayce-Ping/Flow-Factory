@@ -264,7 +264,7 @@ class GRPOTrainer(BaseTrainer):
             desc='Evaluating',
             disable=not self.accelerator.is_local_main_process,
         ):
-            generator = create_generator([b['prompt'] for b in batch], self.training_args.seed)
+            generator = create_generator(batch['prompt'], self.training_args.seed)
             with torch.no_grad():
                 with self.autocast():
                     samples = self.adapter.inference(**batch, generator=generator, compute_log_probs=False)
