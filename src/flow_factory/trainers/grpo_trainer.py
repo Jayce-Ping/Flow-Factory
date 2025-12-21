@@ -47,10 +47,11 @@ class GRPOTrainer(BaseTrainer):
 
             # Evaluation
             if (self.training_args.eval_args.eval_freq > 0 and self.epoch % self.training_args.eval_args.eval_freq == 0):
+                self.adapter.eval()
                 self.evaluate()
-            
+
+            self.adapter.train()            
             samples = self.sample()
-            
             self.compute_loss(samples)
 
             self.adapter.ema_step(step=self.epoch)
@@ -59,7 +60,6 @@ class GRPOTrainer(BaseTrainer):
 
     def sample(self, **kwargs) -> List[BaseSample]:
         """Generate rollouts for GRPO."""
-        self.adapter.train()
         samples = []
         data_iter = iter(self.dataloader)
         
@@ -162,9 +162,6 @@ class GRPOTrainer(BaseTrainer):
         """Main training loop: compute loss and update policy."""
         advantages = self.compute_advantages(samples)
 
-        # Training loop
-        self.adapter.train()
-
         batched_samples = [
             samples[i:i + self.training_args.per_device_batch_size]
             for i in range(0, len(samples), self.training_args.per_device_batch_size)
@@ -247,8 +244,6 @@ class GRPOTrainer(BaseTrainer):
         if self.test_dataloader is None:
             return
         
-        self.adapter.eval()
-
         with self.adapter.use_ema_parameters():
             all_samples : List[BaseSample] = []
             
@@ -259,7 +254,12 @@ class GRPOTrainer(BaseTrainer):
             ):
                 generator = create_generator(batch['prompt'], self.training_args.seed)
                 with torch.no_grad(), self.autocast():
-                        samples = self.adapter.inference(**batch, generator=generator, compute_log_probs=False)
+                        samples = self.adapter.inference(
+                            **batch,
+                            generator=generator,
+                            compute_log_probs=False,
+                            guidance_scale=self.training_args.eval_args.guidance_scale,
+                        )
                 all_samples.extend(samples)
             
             # Compute rewards

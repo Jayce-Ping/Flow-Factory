@@ -173,6 +173,8 @@ class Flux1Adapter(BaseAdapter):
         # Denoising loop
         all_latents = [latents]
         all_log_probs = [] if compute_log_probs else None
+
+        print("Inference timesteps:", timesteps, 'num steps:', len(timesteps), "Scheduler noise steps", self.scheduler.current_noise_steps)
         
         for i, t in enumerate(timesteps):
             timestep = t.expand(batch_size).to(latents.dtype)
@@ -223,6 +225,7 @@ class Flux1Adapter(BaseAdapter):
                 pooled_prompt_embeds=pooled_prompt_embeds[b],
                 image_ids=latent_image_ids,
                 log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_probs else None,
+                extra_kwargs={'guidance_scale': guidance_scale},
             )
             for b in range(batch_size)
         ]
@@ -242,11 +245,16 @@ class Flux1Adapter(BaseAdapter):
         
         batch_size = len(samples)
         device = self.device
+        guidance_scale = [
+            s.extra_kwargs.get('guidance_scale', self.training_args.guidance_scale)
+            for s in samples
+        ]
         
         # Extract data from samples
         latents = torch.stack([s.all_latents[timestep_index] for s in samples], dim=0).to(device)
         next_latents = torch.stack([s.all_latents[timestep_index + 1] for s in samples], dim=0).to(device)
         timestep = torch.stack([s.timesteps[timestep_index] for s in samples], dim=0).to(device)
+        print("Forward timestep:", timestep, "index:", timestep_index)
         
         prompt_embeds = torch.stack([s.prompt_embeds for s in samples], dim=0).to(device)
         pooled_prompt_embeds = torch.stack([s.pooled_prompt_embeds for s in samples], dim=0).to(device)
@@ -258,7 +266,7 @@ class Flux1Adapter(BaseAdapter):
             self.scheduler, self.training_args.num_timesteps, latents.shape[1], device
         )
         
-        guidance = torch.full([batch_size], 3.5, device=device, dtype=torch.float32)
+        guidance = torch.as_tensor(guidance_scale, device=device, dtype=torch.float32)
         
         # Forward pass
         noise_pred = self.pipeline.transformer(

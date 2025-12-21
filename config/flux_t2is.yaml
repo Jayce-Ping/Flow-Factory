@@ -53,6 +53,7 @@ train:
   noise_level: 0.7  # Noise level for sampling
   num_noise_steps: 1  # Number of noise steps
   noise_steps: [1]  # Custom noise window
+  guidance_scale: 3.5  # Guidance scale for sampling
   
   # Optimization
   seed: 42  # Random seed
