@@ -189,7 +189,6 @@ class GRPOTrainer(BaseTrainer):
             disable=not self.accelerator.is_local_main_process,
         )):
             with self.accelerator.accumulate(self.adapter.transformer):
-                num_timesteps = len(self.adapter.scheduler.current_noise_steps)
                 for idx, timestep_index in enumerate(tqdm(
                     self.adapter.scheduler.current_noise_steps,
                     desc=f'Epoch {self.epoch} Timestep',

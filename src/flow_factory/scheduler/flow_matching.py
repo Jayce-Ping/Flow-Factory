@@ -206,6 +206,8 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
         sigma_prev = to_broadcast_tensor(sigma_prev, sample)
         dt = sigma_prev - sigma # dt is negative, (batch_size, 1, 1)
 
+        print("Step at timestep:", timestep, "step_index:", step_index, "noise_level:", noise_level)
+
         sde_type = sde_type or self.sde_type
         # 3. Compute next sample
         if sde_type == "Flow-SDE":
