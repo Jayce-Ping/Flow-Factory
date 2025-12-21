@@ -141,7 +141,6 @@ class GRPOTrainer(BaseTrainer):
             {
                 'train/reward_mean': np.mean(gathered_rewards),
                 'train/reward_std': np.std(gathered_rewards),
-                'unique_prompts_num': len(unique_prompt_ids),
                 'train_samples': samples[:30],
             },
             step=self.step,
@@ -227,9 +226,14 @@ class GRPOTrainer(BaseTrainer):
                         policy_loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
 
                         loss = policy_loss
-                        loss_info['policy_loss'].append(policy_loss.detach().cpu().item())
                         loss_info['ratio'].append(ratio.detach().cpu().mean().item())
-                        loss_info['adv_mean'].append(batch_advantages.abs().cpu().mean().item())
+                        loss_info['adv_abs_mean'].append(batch_advantages.abs().cpu().mean().item())
+                        loss_info['unclipped_loss'].append(unclipped_loss.detach().cpu().mean().item())
+                        loss_info['clipped_loss'].append(clipped_loss.detach().cpu().mean().item())
+                        loss_info['policy_loss'].append(policy_loss.detach().cpu().item())
+                        loss_info["clip_frac_high"].append(torch.mean(ratio > 1.0 + ratio_clip_range[1]).float().item())
+                        loss_info["clip_frac_low"].append(torch.mean(ratio < 1.0 + ratio_clip_range[0]).float().item())
+
                         # Other normalization strategies:
                         # 1. Temp-FlowGRPO
                         # 2. GRPO-Guard
