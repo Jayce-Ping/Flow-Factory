@@ -143,11 +143,11 @@ class TrainingArguments:
         metadata={"help": "Type of trainer to use."},
     )
     clip_range: Union[float, tuple[float, float]] = field(
-        default=1e-4,
+        default=(-1e-4, 1e-4),
         metadata={"help": "Clipping range for PPO/GRPO."},
     )
     adv_clip_range: Union[float, tuple[float, float]] = field(
-        default=5.0,
+        default=(-5.0, 5.0),
         metadata={"help": "Clipping range for advantages in PPO/GRPO."},
     )
     max_grad_norm: float = field(
@@ -300,11 +300,11 @@ class TrainingArguments:
 
         self.adam_betas = tuple(self.adam_betas)
         
-        if not isinstance(self.clip_range, tuple):
-            self.clip_range = (-self.clip_range, self.clip_range)
+        if not isinstance(self.clip_range, (tuple, list)):
+            self.clip_range = (-abs(self.clip_range), abs(self.clip_range))
 
-        if not isinstance(self.adv_clip_range, tuple):
-            self.adv_clip_range = (-self.adv_clip_range, self.adv_clip_range)
+        if not isinstance(self.adv_clip_range, (tuple, list)):
+            self.adv_clip_range = (-abs(self.adv_clip_range), abs(self.adv_clip_range))
 
         if isinstance(self.eval_args, dict):
             self.eval_args = EvaluationArguments(**self.eval_args)
