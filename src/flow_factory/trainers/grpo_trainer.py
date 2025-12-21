@@ -223,7 +223,7 @@ class GRPOTrainer(BaseTrainer):
                         ratio_clip_range = self.training_args.clip_range
 
                         unclipped_loss = -batch_advantages * ratio
-                        clipped_loss = -batch_advantages * torch.clamp(ratio, 1.0 - ratio_clip_range[0], 1.0 + ratio_clip_range[1])
+                        clipped_loss = -batch_advantages * torch.clamp(ratio, 1.0 + ratio_clip_range[0], 1.0 + ratio_clip_range[1])
                         policy_loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
 
                         loss = policy_loss
