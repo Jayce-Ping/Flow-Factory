@@ -139,7 +139,6 @@ class Flux1Adapter(BaseAdapter):
         dtype = prompt_embeds.dtype if prompt_embeds is not None else torch.float32
         # Encode prompts if not provided
         if prompt_embeds is None:
-            print("Encoding prompts...")
             encoded = self.encode_prompt(prompt)
             prompt_embeds = encoded['prompt_embeds']
             pooled_prompt_embeds = encoded['pooled_prompt_embeds']
