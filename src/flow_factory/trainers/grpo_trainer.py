@@ -259,17 +259,16 @@ class GRPOTrainer(BaseTrainer):
                         self.adapter.get_trainable_parameters(),
                         self.training_args.max_grad_norm,
                     )
-                    if self.logger is not None:
-                        # Communicate and log losses
-                        loss_info = {
-                            k: torch.stack(v).mean() 
-                            for k, v in loss_info.items()
-                        }
-                        loss_info = self.accelerator.reduce(loss_info, reduction="mean")
-                        self.log_data(
-                            {f'train/{k}': v for k, v in loss_info.items()},
-                            step=self.step,
-                        )
+                    # Communicate and log losses
+                    loss_info = {
+                        k: torch.stack(v).mean() 
+                        for k, v in loss_info.items()
+                    }
+                    loss_info = self.accelerator.reduce(loss_info, reduction="mean")
+                    self.log_data(
+                        {f'train/{k}': v for k, v in loss_info.items()},
+                        step=self.step,
+                    )
                     self.step += 1
                     loss_info = defaultdict(list)
                 
