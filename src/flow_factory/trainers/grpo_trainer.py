@@ -46,7 +46,10 @@ class GRPOTrainer(BaseTrainer):
                 self.save_checkpoint(save_path)
 
             # Evaluation
-            if (self.training_args.eval_args.eval_freq > 0 and self.epoch % self.training_args.eval_args.eval_freq == 0):
+            if (
+                self.training_args.eval_args.eval_freq > 0 and
+                self.epoch % self.training_args.eval_args.eval_freq == 0
+            ):
                 self.evaluate()
 
             samples = self.sample()
@@ -60,7 +63,6 @@ class GRPOTrainer(BaseTrainer):
         """Generate rollouts for GRPO."""
         self.adapter.train()
         self.adapter.transformer.eval()
-        self.adapter.scheduler.train()
         samples = []
         data_iter = iter(self.dataloader)
         
