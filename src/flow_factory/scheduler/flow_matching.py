@@ -176,6 +176,7 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
         sde_type : Optional[Literal['Flow-SDE', 'Dance-SDE', 'CPS']] = None,
         sigma_max: Optional[float] = None,
     ):
+        is_batched = isinstance(timestep, torch.Tensor) and timestep.ndim > 0
         if (
             isinstance(timestep, int)
             or isinstance(timestep, torch.IntTensor)
@@ -189,12 +190,16 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
             )
             step_index = int(timestep)
             timestep = self.timesteps[step_index]
-            sigma = self.sigmas[step_index]
-            sigma_prev = self.sigmas[step_index + 1]
+            sigma = self.sigmas[step_index] # (1)
+            sigma_prev = self.sigmas[step_index + 1] # (1)
         elif isinstance(timestep, (float, torch.Tensor)):
-            step_index = self.index_for_timestep(timestep)
-            sigma = self.sigmas[step_index]
-            sigma_prev = self.sigmas[step_index + 1]
+            if is_batched:
+                step_index = [self.index_for_timestep(t) for t in timestep] # (B,)
+            else:
+                step_index = self.index_for_timestep(timestep)
+
+            sigma = self.sigmas[step_index] # (B, ) or (1)
+            sigma_prev = self.sigmas[[i + 1 for i in step_index]] # (B, ) or (1)
 
         # 1. Numerical Preparation
         model_output = model_output.float()
@@ -206,7 +211,7 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
         noise_level = noise_level or (
             0.0 if self.is_eval else self.get_noise_level_for_timestep(timestep)
         )
-        noise_level = to_broadcast_tensor(noise_level, sample)
+        noise_level = to_broadcast_tensor(noise_level, sample) # To (B, 1, 1)
         sigma = to_broadcast_tensor(sigma, sample)
         sigma_prev = to_broadcast_tensor(sigma_prev, sample)
         dt = sigma_prev - sigma # dt is negative, (batch_size, 1, 1)
