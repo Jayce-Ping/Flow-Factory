@@ -231,8 +231,8 @@ class GRPOTrainer(BaseTrainer):
                         loss_info['unclipped_loss'].append(unclipped_loss.detach().cpu().mean().item())
                         loss_info['clipped_loss'].append(clipped_loss.detach().cpu().mean().item())
                         loss_info['policy_loss'].append(policy_loss.detach().cpu().item())
-                        loss_info["clip_frac_high"].append(torch.mean(ratio > 1.0 + ratio_clip_range[1]).float().item())
-                        loss_info["clip_frac_low"].append(torch.mean(ratio < 1.0 + ratio_clip_range[0]).float().item())
+                        loss_info["clip_frac_high"].append(torch.mean((ratio > 1.0 + ratio_clip_range[1]).float()).item())
+                        loss_info["clip_frac_low"].append(torch.mean((ratio < 1.0 + ratio_clip_range[0]).float()).item())
 
                         # Other normalization strategies:
                         # 1. Temp-FlowGRPO
