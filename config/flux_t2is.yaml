@@ -1,7 +1,7 @@
 # Environment Configuration
 launcher: "accelerate"  # Options: accelerate
 config_file: config/accelerate_configs/multi_gpu.yaml  # Path to distributed config file (optional)
-num_processes: 2  # Number of processes to launch (overrides config file)
+num_processes: 8  # Number of processes to launch (overrides config file)
 main_process_port: 29500
 
 run_name: null  # Run name (auto: {model_type}_{finetune_type}_{timestamp})
@@ -40,18 +40,18 @@ train:
   
   # Batch and sampling
   per_device_batch_size: 1  # Batch size per device
-  group_size: 4  # Group size for GRPO sampling
+  group_size: 24  # Group size for GRPO sampling
   global_std: false  # Use global std for advantage normalization
-  unique_sample_num_per_epoch: 4  # Unique samples per group
+  unique_sample_num_per_epoch: 32  # Unique samples per group
   gradient_step_per_epoch: 2  # Gradient steps per epoch
   
   # Clipping
-  clip_range: 1.0e-4  # PPO/GRPO clipping range
+  clip_range: 1.0e-5  # PPO/GRPO clipping range
   adv_clip_range: 5.0  # Advantage clipping range
   max_grad_norm: 1.0  # Max gradient norm for clipping
   
   # Denoising process
-  sde_type: "Flow-SDE"  # Options: Flow-SDE, Dance-SDE, CPS
+  sde_type: "CPS"  # Options: Flow-SDE, Dance-SDE, CPS
   num_inference_steps: 10  # Number of SDE timesteps
   noise_level: 0.7  # Noise level for sampling
   num_noise_steps: 1  # Number of noise steps
