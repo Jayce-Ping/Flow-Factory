@@ -45,6 +45,7 @@ class GeneralDataset(Dataset):
         cache_dir="~/.cache/flow_factory/datasets",
         enable_preprocess=True,
         preprocessing_batch_size=16,
+        max_dataset_size: Optional[int] = None,
         text_encode_func: Optional[TextEncodeCallable] = None,
         image_encode_func: Optional[ImageEncodeCallable] = None,
         video_encode_func: Optional[VideoEncodeCallable] = None,
@@ -71,6 +72,10 @@ class GeneralDataset(Dataset):
             logger.info(f"Loaded {len(prompts)} prompts from {txt_path}")
         else:
             raise FileNotFoundError(f"Could not find {jsonl_path} or {txt_path}")
+        
+        if max_dataset_size is not None and len(raw_dataset) > max_dataset_size:
+            raw_dataset = raw_dataset.select(range(max_dataset_size))
+            logger.info(f"Dataset size limited to {max_dataset_size} samples.")
     
         if enable_preprocess:
             self._text_encode_func = text_encode_func

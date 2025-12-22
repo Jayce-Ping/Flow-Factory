@@ -25,6 +25,11 @@ class DataArguments(ArgABC):
         metadata={"help": "Whether to enable preprocessing of the dataset."},
     )
 
+    max_dataset_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "If set, limits the maximum number of samples in the dataset."},
+    )
+
     def __post_init__(self):
         self.dataset = self.dataset_dir
 

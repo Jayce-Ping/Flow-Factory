@@ -14,6 +14,7 @@ data:
   preprocessing_batch_size: 8  # Batch size for preprocessing
   dataloader_num_workers: 16  # Number of workers for DataLoader
   enable_preprocess: true  # Enable dataset preprocessing
+  max_dataset_size: 1000  # Limit the maximum number of samples in the dataset
 
 # Model Configuration
 model:

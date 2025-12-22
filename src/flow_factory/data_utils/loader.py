@@ -29,6 +29,7 @@ def get_dataloader(
         "dataset_dir": data_args.dataset,
         "enable_preprocess": data_args.enable_preprocess,
         "preprocessing_batch_size": data_args.preprocessing_batch_size,
+        'max_dataset_size': data_args.max_dataset_size,
         "text_encode_func": text_encode_func,
         "image_encode_func": image_encode_func,
         "video_encode_func": video_encode_func,
