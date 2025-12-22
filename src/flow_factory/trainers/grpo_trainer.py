@@ -181,25 +181,22 @@ class GRPOTrainer(BaseTrainer):
         advantages = self.compute_advantages(samples)
 
         # s = f"Rank {self.accelerator.process_index}: "
-        # for sample, adv in zip(samples, advantages):
-        #     sample.extra_kwargs['advantage'] = adv
+        for sample, adv in zip(samples, advantages):
+            sample.extra_kwargs['advantage'] = adv
         #     s += f"[{sample.short_rep()}]"
         
         # # print(s)
 
-        batched_samples = [
+        samples : List[List[BaseSample]] = [
             samples[i:i + self.training_args.per_device_batch_size]
             for i in range(0, len(samples), self.training_args.per_device_batch_size)
         ]
-        batched_advantages = advantages.reshape(
-            -1, self.training_args.per_device_batch_size
-        )
 
         loss_info = defaultdict(list)
 
-        for batch_idx, (batch_samples, batch_advantages) in enumerate(tqdm(
-            zip(batched_samples, batched_advantages),
-            total=len(batched_samples),
+        for batch_idx, batch_samples in enumerate(tqdm(
+            samples,
+            total=len(samples),
             desc=f'Epoch {self.epoch} Training',
             position=0,
             disable=not self.accelerator.is_local_main_process,
@@ -217,6 +214,10 @@ class GRPOTrainer(BaseTrainer):
                             [sample.log_probs[timestep_index] for sample in batch_samples],
                             dim=0
                         )
+                        adv = torch.stack(
+                            [sample.extra_kwargs['advantage'] for sample in batch_samples],
+                            dim=0
+                        )
 
                         with self.autocast():
                             # Forward pass
@@ -229,13 +230,13 @@ class GRPOTrainer(BaseTrainer):
 
                         # Clip advantages
                         adv_clip_range = self.training_args.adv_clip_range
-                        batch_advantages = torch.clamp(batch_advantages, adv_clip_range[0], adv_clip_range[1])
+                        adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
                         # PPO-style clipped loss
                         ratio = torch.exp(output.log_prob - old_log_probs)
                         ratio_clip_range = self.training_args.clip_range
 
-                        unclipped_loss = -batch_advantages * ratio
-                        clipped_loss = -batch_advantages * torch.clamp(ratio, 1.0 + ratio_clip_range[0], 1.0 + ratio_clip_range[1])
+                        unclipped_loss = -adv * ratio
+                        clipped_loss = -adv * torch.clamp(ratio, 1.0 + ratio_clip_range[0], 1.0 + ratio_clip_range[1])
                         policy_loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
 
                         loss = policy_loss
