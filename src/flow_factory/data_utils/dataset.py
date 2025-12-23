@@ -85,9 +85,13 @@ class GeneralDataset(Dataset):
             self._video_encode_func = video_encode_func
             
             os.makedirs(cache_dir, exist_ok=True)
+            funcs_hash = _compute_encode_funcs_hash(
+                text_encode_func, image_encode_func, video_encode_func
+            )
             fingerprint = (
                 f"cache_{os.path.basename(self.data_root)}_{split}_"
-                f"cutoff{max_dataset_size if max_dataset_size else 'full'}"
+                f"cutoff{max_dataset_size if max_dataset_size else 'full'}_"
+                f"{funcs_hash}"
             )
             
             self.processed_dataset = raw_dataset.map(
@@ -195,3 +199,91 @@ class GeneralDataset(Dataset):
                 collated_batch[key] = values
 
         return collated_batch
+
+
+
+def _compute_function_hash(func: Optional[Callable], digits: int = 16) -> str:
+    """
+    Compute a stable hash value for a callable function to use in cache fingerprints.
+    
+    Strategy (fallback chain):
+    1. Use function source code (most accurate)
+    2. Fall back to module path + function name (for compatibility)
+    3. Final fallback to object ID (unstable but always works)
+    
+    Args:
+        func: The callable to compute hash for, can be None
+    
+    Returns:
+        A 16-character hexadecimal hash string
+    
+    Examples:
+        >>> def my_func(x): return x * 2
+        >>> hash1 = _compute_function_hash(my_func)
+        >>> hash2 = _compute_function_hash(None)
+        >>> hash1 != hash2
+        True
+    """
+    _MAX_DIGITS = 32
+    digits = min(digits, _MAX_DIGITS)
+    if func is None:
+        return "none" * 4  # "nonenonenoneone" - stable identifier for None
+    
+    try:
+        # Method 1: Get function source code (most reliable)
+        source = inspect.getsource(func)
+        # Remove whitespace differences to avoid spurious cache misses
+        source = "".join(source.split())
+        return hashlib.md5(source.encode()).hexdigest()[:digits]
+    except (TypeError, OSError):
+        # Method 2: Use module path + function name (fallback)
+        try:
+            module = inspect.getmodule(func)
+            module_name = module.__name__ if module else "unknown"
+            func_name = getattr(func, '__qualname__', getattr(func, '__name__', 'anonymous'))
+            signature = f"{module_name}.{func_name}"
+            return hashlib.md5(signature.encode()).hexdigest()[:digits]
+        except:
+            # Method 3: Final fallback - use object ID (not stable across runs but prevents crashes)
+            logger.warning(f"Could not compute stable hash for {func}, using id() fallback")
+            return hashlib.md5(str(id(func)).encode()).hexdigest()[:digits]
+
+
+def _compute_encode_funcs_hash(*funcs: Optional[Callable], digits: int = 16) -> str:
+    """
+    Compute a joint hash value for multiple encoding functions.
+    
+    This ensures that cache is invalidated when any preprocessing logic changes,
+    while allowing cache reuse when logic remains the same.
+    
+    Args:
+        *funcs: Variable number of callables (encoding functions)
+                Can include None values which will be handled gracefully
+    
+    Returns:
+        A 16-character hexadecimal hash string representing the joint hash
+    
+    Examples:
+        >>> hash1 = _compute_encode_funcs_hash(text_enc, image_enc, None)
+        >>> hash2 = _compute_encode_funcs_hash(text_enc, image_enc, video_enc)
+        >>> hash1 != hash2  # Different because third function changed
+        True
+        
+        >>> # Same functions produce same hash
+        >>> hash3 = _compute_encode_funcs_hash(text_enc, image_enc, None)
+        >>> hash1 == hash3
+        True
+    """
+    _MAX_DIGITS = 32
+    digits = min(digits, _MAX_DIGITS)
+    # Compute individual hashes for each function
+    individual_hashes = [_compute_function_hash(func) for func in funcs]
+    
+    # Combine hashes with labels for clarity in debugging
+    combined_parts = [f"func{i}:{hash_val}" for i, hash_val in enumerate(individual_hashes)]
+    combined = "|".join(combined_parts)
+    
+    # Generate final joint hash
+    joint_hash = hashlib.md5(combined.encode()).hexdigest()[:digits]
+    
+    return joint_hash

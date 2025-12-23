@@ -15,7 +15,7 @@ data:
   preprocessing_batch_size: 8  # Batch size for preprocessing
   dataloader_num_workers: 16  # Number of workers for DataLoader
   enable_preprocess: true  # Enable dataset preprocessing
-  force_reprocess: true  # Force reprocessing of the dataset
+  force_reprocess: false  # Force reprocessing of the dataset
   max_dataset_size: 1000  # Limit the maximum number of samples in the dataset
 
 # Model Configuration
@@ -77,7 +77,7 @@ train:
     seed: 42  # Eval seed (defaults to training seed)
     guidance_scale: 3.5  # Guidance scale for sampling
     num_inference_steps: 9  # Number of eval timesteps
-    eval_freq: 10  # Eval frequency in epochs (0 to disable)
+    eval_freq: 0  # Eval frequency in epochs (0 to disable)
 
 # Reward Model Configuration
 reward:
