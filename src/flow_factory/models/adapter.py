@@ -33,7 +33,6 @@ class BaseSample(BaseOutput):
     all_latents : torch.FloatTensor
     timesteps : torch.FloatTensor
     prompt_ids : torch.LongTensor
-    negative_prompt_ids : Optional[torch.FloatTensor] = None
     height : Optional[int] = None
     width : Optional[int] = None
     image: Optional[Image.Image] = None
@@ -516,6 +515,7 @@ class BaseAdapter(nn.Module, ABC):
         self,
         samples : List[BaseSample],
         timestep_index : Union[int, torch.IntTensor, torch.LongTensor],
+        compute_log_prob: bool = True,
         **kwargs,
     ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
         """

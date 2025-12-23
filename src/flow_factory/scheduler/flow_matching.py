@@ -182,7 +182,7 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
         prev_sample: Optional[torch.FloatTensor] = None,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         noise_level : Optional[Union[int, float, torch.Tensor]] = None,
-        compute_log_prob: bool = False,
+        compute_log_prob: bool = True,
         return_dict: bool = True,
         sde_type : Optional[Literal['Flow-SDE', 'Dance-SDE', 'CPS']] = None,
         sigma_max: Optional[float] = None,

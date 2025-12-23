@@ -105,7 +105,7 @@ class Flux1Adapter(BaseAdapter):
         num_inference_steps: Optional[int] = None,
         guidance_scale: Optional[float] = None,
         generator: Optional[torch.Generator] = None,
-        compute_log_probs: bool = True,
+        compute_log_prob: bool = True,
     ) -> List[Flux1Sample]:
         """Execute generation and return FluxSample objects."""
         
@@ -156,7 +156,7 @@ class Flux1Adapter(BaseAdapter):
         
         # Denoising loop
         all_latents = [latents]
-        all_log_probs = [] if compute_log_probs else None
+        all_log_probs = [] if compute_log_prob else None
         
         for i, t in enumerate(timesteps):
             timestep = t.expand(batch_size).to(latents.dtype)
@@ -180,13 +180,13 @@ class Flux1Adapter(BaseAdapter):
                 model_output=noise_pred,
                 timestep=t,
                 sample=latents,
-                compute_log_prob=compute_log_probs and current_noise_level > 0,
+                compute_log_prob=compute_log_prob and current_noise_level > 0,
             )
             
             latents = output.prev_sample.to(dtype)
             all_latents.append(latents)
             
-            if compute_log_probs:
+            if compute_log_prob:
                 all_log_probs.append(output.log_prob)
         
         # Decode images
@@ -205,7 +205,7 @@ class Flux1Adapter(BaseAdapter):
                 prompt_embeds=prompt_embeds[b],
                 pooled_prompt_embeds=pooled_prompt_embeds[b],
                 image_ids=latent_image_ids,
-                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_probs else None,
+                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
                 extra_kwargs={'guidance_scale': guidance_scale},
             )
             for b in range(batch_size)

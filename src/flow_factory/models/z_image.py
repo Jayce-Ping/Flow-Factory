@@ -172,7 +172,7 @@ class ZImageAdapter(BaseAdapter):
         cfg_truncation: Optional[float] = 1.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         max_sequence_length: int = 512,
-        compute_log_probs: bool = True,
+        compute_log_prob: bool = True,
     ):
         height = height or (self.training_args.resolution[0] if self.training else self.training_args.eval_args.resolution[0])
         width = width or (self.training_args.resolution[1] if self.training else self.training_args.eval_args.resolution[1])
@@ -222,7 +222,7 @@ class ZImageAdapter(BaseAdapter):
         )
 
         all_latents = [latents]
-        all_log_probs = [] if compute_log_probs else None
+        all_log_probs = [] if compute_log_prob else None
         
         for i, t in enumerate(timesteps):
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
@@ -297,13 +297,13 @@ class ZImageAdapter(BaseAdapter):
                 model_output=noise_pred,
                 timestep=t,
                 sample=latents,
-                compute_log_prob=compute_log_probs and current_noise_level > 0,
+                compute_log_prob=compute_log_prob and current_noise_level > 0,
             )
 
             latents = output.prev_sample.to(dtype)
             all_latents.append(latents)
             
-            if compute_log_probs:
+            if compute_log_prob:
                 all_log_probs.append(output.log_prob)
 
         images = self.decode_latents(latents)
@@ -322,7 +322,7 @@ class ZImageAdapter(BaseAdapter):
                 negative_prompt=negative_prompt[b] if negative_prompt is not None else None,
                 negative_prompt_ids=negative_prompt_ids[b] if negative_prompt_ids is not None else None,
                 negative_prompt_embeds=negative_prompt_embeds[b] if negative_prompt_embeds is not None else None,
-                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_probs else None,
+                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
                 extra_kwargs={
                     'guidance_scale': guidance_scale,
                     'cfg_truncation': cfg_truncation,
