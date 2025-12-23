@@ -3,7 +3,9 @@ from typing import Any, Dict
 import wandb
 from .abc import Logger
 from .formatting import LogImage, LogVideo
+from .registry import register_logger
 
+@register_logger('wandb')
 class WandbLogger(Logger):
     def _init_platform(self):
         wandb.init(

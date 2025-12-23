@@ -9,8 +9,9 @@ from diffusers.pipelines.flux.pipeline_flux import FluxPipeline
 from PIL import Image
 import logging
 
-from ..hparams import *
+from .registry import register_model_adapter
 from .adapter import BaseAdapter, BaseSample
+from ..hparams import *
 from ..scheduler.flow_matching import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput, set_scheduler_timesteps
 from ..utils.base import filter_kwargs
 
@@ -22,7 +23,7 @@ class Flux1Sample(BaseSample):
     """Output class for Flux Adapter models."""
     pooled_prompt_embeds : Optional[torch.FloatTensor] = None
 
-
+@register_model_adapter('flux1')
 class Flux1Adapter(BaseAdapter):
     """Concrete implementation for Flow Matching models (FLUX.1)."""
     

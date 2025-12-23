@@ -15,7 +15,7 @@ from accelerate.utils import set_seed, ProjectConfiguration
 from ..hparams import *
 from ..models.adapter import BaseAdapter
 from ..data_utils.loader import get_dataloader
-from ..rewards.reward_model import BaseRewardModel
+from ..rewards import load_reward_model, BaseRewardModel
 from ..logger import load_logger
 
 class BaseTrainer(ABC):
@@ -72,8 +72,10 @@ class BaseTrainer(ABC):
 
     def _init_reward_model(self) -> BaseRewardModel:
         """Initialize reward model from configuration."""
-        reward_model_cls = self.reward_args.reward_model_cls
-        self.reward_model = reward_model_cls(config=self.config, accelerator=self.accelerator)
+        self.reward_model = load_reward_model(
+            config=self.config,
+            accelerator=self.accelerator,
+        )
         return self.reward_model
 
     def _init_dataloader(self) -> Tuple[DataLoader, Union[None, DataLoader]]:

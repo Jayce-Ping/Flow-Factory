@@ -3,7 +3,9 @@ from typing import Any, Dict
 import swanlab
 from .abc import Logger
 from .formatting import LogImage, LogVideo
+from .registry import register_logger
 
+@register_logger('swanlab')
 class SwanlabLogger(Logger):
     def _init_platform(self):
         swanlab.init(

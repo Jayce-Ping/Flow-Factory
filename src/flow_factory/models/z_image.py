@@ -9,8 +9,9 @@ from diffusers.pipelines.z_image.pipeline_z_image import ZImagePipeline
 from PIL import Image
 import logging
 
-from ..hparams import *
+from .registry import register_model_adapter
 from .adapter import BaseAdapter, BaseSample
+from ..hparams import *
 from ..scheduler.flow_matching import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput, set_scheduler_timesteps
 from ..utils.base import filter_kwargs
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class ZImageSample(BaseSample):
     pass
 
-
+@register_model_adapter('z-image')
 class ZImageAdapter(BaseAdapter):
     def __init__(self, config: Arguments):
         super().__init__(config)
