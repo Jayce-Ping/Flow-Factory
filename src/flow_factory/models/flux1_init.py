@@ -193,7 +193,7 @@ class Flux1InitAdapter(BaseAdapter):
                 model_output=noise_pred,
                 timestep=t,
                 sample=latents,
-                compute_log_prob=compute_log_prob and current_noise_level > 0,
+                compute_log_prob=compute_log_prob and i == 0,  # Compute log_prob only for the first step
             )
             
             latents = output.prev_sample.to(dtype)
