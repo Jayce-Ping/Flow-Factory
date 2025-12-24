@@ -18,7 +18,7 @@ from peft import get_peft_model, LoraConfig, PeftModel
 
 
 from ..ema import EMAModuleWrapper
-from ..scheduler.flow_matching_sde import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput
+from ..scheduler import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput
 from ..hparams import *
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
@@ -110,10 +110,10 @@ class BaseAdapter(nn.Module, ABC):
         """Load and return the scheduler."""
         return FlowMatchEulerDiscreteSDEScheduler(
             noise_level=self.training_args.noise_level,
-            noise_steps=self.training_args.noise_steps,
-            num_noise_steps=self.training_args.num_noise_steps,
+            train_steps=self.training_args.train_steps,
+            num_train_steps=self.training_args.num_train_steps,
             seed=self.training_args.seed,
-            sde_type=self.training_args.sde_type,
+            sde_type=self.training_args.dynamics_type,
             **self.pipeline.scheduler.config.__dict__,
         )
 

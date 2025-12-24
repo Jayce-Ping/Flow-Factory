@@ -156,7 +156,7 @@ class TrainingArguments:
     )
 
     # Denoising process arguments
-    sde_type: Literal["Flow-SDE", 'Dance-SDE', 'CPS'] = field(
+    dynamics_type: Literal["Flow-SDE", 'Dance-SDE', 'CPS', 'ODE'] = field(
         default="Flow-SDE",
         metadata={"help": "Type of SDE to use."},
     )
@@ -172,15 +172,15 @@ class TrainingArguments:
         default=0.01,
         metadata={"help": "Mix ratio between two initial latents for SDE sampling."},
     )
-    num_noise_steps : int = field(
+    num_train_steps : int = field(
         default=1,
-        metadata={"help": "Number of noise steps for SDE sampling."},
+        metadata={"help": "Number of train steps."},
     )
-    noise_steps: Optional[List[int]] = field(
+    train_steps: Optional[List[int]] = field(
         default=None,
         metadata={"help": (
-            "Noise window for SDE sampling. "
-            "    `noise_step_num` steps will be randomly sampled from this list."
+            "Training steps for optimization. "
+            "    `train_steps` will be randomly sampled from this list."
             "    If None, will use the first 1/2 of the timesteps."
         )
         },
@@ -282,8 +282,8 @@ class TrainingArguments:
         world_size = get_world_size()
         logger.info("World Size:" + str(world_size))
 
-        if self.noise_steps is None:
-            self.noise_steps = list(range(self.num_inference_steps // 2))
+        if self.train_steps is None:
+            self.train_steps = list(range(self.num_inference_steps // 2))
 
         # Adjust unique_sample_num for even distribution
         sample_num_per_iteration = world_size * self.per_device_batch_size

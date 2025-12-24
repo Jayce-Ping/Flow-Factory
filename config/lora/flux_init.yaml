@@ -52,12 +52,12 @@ train:
   max_grad_norm: 1.0  # Max gradient norm for clipping
   
   # Denoising process
-  sde_type: "Flow-SDE"  # Options: Flow-SDE, Dance-SDE, CPS
+  dynamics_type: "ODE"  # Options: Flow-SDE, Dance-SDE, CPS, ODE
   num_inference_steps: 9  # Number of SDE timesteps
   noise_level: 0  # Noise level for sampling
-  num_noise_steps: 1  # Number of noise steps
-  noise_steps: [0]  # Custom noise window
-  mix_ratio: 0.01
+  num_train_steps: 1  # Number of training steps
+  train_steps: [0]  # Custom training window
+  mix_ratio: 0.005
   guidance_scale: 3.5  # Guidance scale for sampling
   
   # Optimization
