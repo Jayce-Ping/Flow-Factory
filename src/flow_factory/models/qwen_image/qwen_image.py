@@ -240,11 +240,11 @@ class QwenImageAdapter(BaseAdapter):
         **kwargs,
     ):
         # 1. Prepare inputs
-        height = height or (self.training_args.resolution[0] if self.training else self.training_args.eval_args.resolution[0])
-        width = width or (self.training_args.resolution[1] if self.training else self.training_args.eval_args.resolution[1])
-        num_inference_steps = num_inference_steps or (self.training_args.num_inference_steps if self.training else self.training_args.eval_args.num_inference_steps)
+        height = height or (self.training_args.resolution[0] if self.training else self.eval_args.resolution[0])
+        width = width or (self.training_args.resolution[1] if self.training else self.eval_args.resolution[1])
+        num_inference_steps = num_inference_steps or (self.training_args.num_inference_steps if self.training else self.eval_args.num_inference_steps)
         # Qwen-Image uses `true_cfg_scale` since it is not a guidance-distilled model.
-        true_cfg_scale = guidance_scale or (self.training_args.guidance_scale if self.training else self.training_args.eval_args.guidance_scale)
+        true_cfg_scale = guidance_scale or (self.training_args.guidance_scale if self.training else self.eval_args.guidance_scale)
         device = self.device
         dtype = self.transformer.dtype
         has_neg_prompt = negative_prompt is not None or (

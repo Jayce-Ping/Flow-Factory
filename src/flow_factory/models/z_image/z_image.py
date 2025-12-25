@@ -174,10 +174,10 @@ class ZImageAdapter(BaseAdapter):
         max_sequence_length: int = 512,
         compute_log_prob: bool = True,
     ):
-        height = height or (self.training_args.resolution[0] if self.training else self.training_args.eval_args.resolution[0])
-        width = width or (self.training_args.resolution[1] if self.training else self.training_args.eval_args.resolution[1])
-        num_inference_steps = num_inference_steps or (self.training_args.num_inference_steps if self.training else self.training_args.eval_args.num_inference_steps)
-        guidance_scale = guidance_scale or (self.training_args.guidance_scale if self.training else self.training_args.eval_args.guidance_scale)
+        height = height or (self.training_args.resolution[0] if self.training else self.eval_args.resolution[0])
+        width = width or (self.training_args.resolution[1] if self.training else self.eval_args.resolution[1])
+        num_inference_steps = num_inference_steps or (self.training_args.num_inference_steps if self.training else self.eval_args.num_inference_steps)
+        guidance_scale = guidance_scale or (self.training_args.guidance_scale if self.training else self.eval_args.guidance_scale)
         device = self.device
         dtype = self.transformer.dtype
         do_classifier_free_guidance = guidance_scale > 1.0

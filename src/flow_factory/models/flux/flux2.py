@@ -216,90 +216,78 @@ class Flux2Adapter(BaseAdapter):
             **kwargs
         ) -> Dict[str, Union[List[Any], torch.Tensor]]:
         """Preprocess inputs for Flux.2 model. The inputs are expected to be batches."""
-        assert isinstance(prompt, list), "Prompt must be a batch of strings."
+        # Normalize images to List[List[Image]] or None
         if images is not None:
-            assert len(prompt) == len(images), "Number of prompts must match number of condition image sets."
-            # A batch of image lists, convert each image to a singleton list if not already
-            images = [
-                [img] if not isinstance(img, list) else img
-                for img in images
-            ]
-        
-        if images is None:
-            # No condition images provided, process only prompts in batch
-            if caption_upsample_temperature:
-                final_prompt = self.pipeline.upsample_prompt(
+            assert len(prompt) == len(images), "Prompts and images must have same batch size"
+            images = [[img] if isinstance(img, Image.Image) else img for img in images]
+            has_images = any(img_list for img_list in images)
+        else:
+            has_images = False
+
+        device = self.pipeline.text_encoder.device
+        # Case 1: batch process when no images
+        if not has_images:
+            final_prompts = (
+                self.pipeline.upsample_prompt(
                     prompt=prompt,
                     images=None,
                     temperature=caption_upsample_temperature,
-                    device=self.pipeline.text_encoder.device
+                    device=device
+                ) if caption_upsample_temperature else prompt
+            )
+            batch = self.encode_prompt(
+                prompt=final_prompts,
+                device=device,
+                **filter_kwargs(self.encode_prompt, **kwargs)
+            )
+            return batch
+        
+        # Case 2: process each sample individually
+
+        if not self._has_warned_preprocess_fallback:
+            logger.warning(
+                "Flux.2: Batched image processing unsupported. Processing individually (warning shown once)."
+            )
+            self._has_warned_preprocess_fallback = True
+
+        batch = []
+        for p, imgs in zip(prompt, images):
+            final_p = (
+                self.pipeline.upsample_prompt(
+                    prompt=p,
+                    images=imgs,
+                    temperature=caption_upsample_temperature,
+                    device=device
                 )
-            else:
-                final_prompt = prompt
+                if caption_upsample_temperature else p
+            )
             
-            # 1. Process prompt
             prompt_encode_dict = self.encode_prompt(
-                prompt=final_prompt,
+                prompt=final_p,
                 device=self.pipeline.text_encoder.device,
                 **filter_kwargs(self.encode_prompt, **kwargs)
             )
-            # No condition images
-            batch = {**prompt_encode_dict}
-        else:
-            # Condition images provided, process each sample individually
-            if not self._has_warned_preprocess_fallback:
-                logger.warning(
-                    "Flux.2 does not support processing with batches of condition images."
-                    "Processing each sample individually. This warning will only appear once."
-                )
-                self._has_warned_preprocess_fallback = True
 
-            # images: List[List[Optional[Image.Image]]]
-            batch = []
-            for p, imgs in zip(
-                prompt,
-                images,
-            ):
-                # imgs: List[Optional[Image.Image]]
-                if caption_upsample_temperature:
-                    final_prompt = self.pipeline.upsample_prompt(
-                        prompt=p,
-                        images=imgs,
-                        temperature=caption_upsample_temperature,
-                        device=self.pipeline.text_encoder.device
-                    )
-                else:
-                    final_prompt = p
-                
-                # 1. Process prompt
-                prompt_encode_dict = self.encode_prompt(
-                    prompt=final_prompt,
-                    device=self.pipeline.text_encoder.device,
-                    **filter_kwargs(self.encode_prompt, **kwargs)
+            if len(imgs) == 0 or imgs[0] is None:
+                image_dict = {
+                    'image_latents': None,
+                    'image_latent_ids': None,
+                }
+            else:            
+                image_encode_dict = self.encode_image(
+                    images=imgs,
+                    device=self.pipeline.vae.device,
+                    **filter_kwargs(self.encode_image, **kwargs)
                 )
-
-                # 2. Process condition images
-                if len(imgs) == 0 or imgs[0] is None:
-                    image_encode_dict = {
-                        'image_latents': None,
-                        'image_latent_ids': None,
-                    }
-                else:
-                    image_encode_dict = self.encode_image(
-                        images=imgs,
-                        device=self.pipeline.vae.device,
-                        **filter_kwargs(self.encode_image, **kwargs)
-                    )
                 sample = {**prompt_encode_dict, **image_encode_dict}
                 batch.append(sample)
-
-            # Collate batch, convert List[Dict] to Dict[List]
-            batch = {
-                k : [sample[k] for sample in batch]
-                for k in batch[0].keys()
-            }
-
-        return batch
+    
+        # Collate batch
+        collated_batch ={
+            k: [sample[k] for sample in batch]
+            for k in batch[0].keys()
+        }
+        return collated_batch
         
     
     # ======================== Sampling / Inference ========================
@@ -331,10 +319,10 @@ class Flux2Adapter(BaseAdapter):
         """
 
         # 1. Setup
-        height = height or (self.training_args.resolution[0] if self.training else self.training_args.eval_args.resolution[0])
-        width = width or (self.training_args.resolution[1] if self.training else self.training_args.eval_args.resolution[1])
-        num_inference_steps = num_inference_steps or (self.training_args.num_inference_steps if self.training else self.training_args.eval_args.num_inference_steps)
-        guidance_scale = guidance_scale or (self.training_args.guidance_scale if self.training else self.training_args.eval_args.guidance_scale)
+        height = height or (self.training_args.resolution[0] if self.training else self.eval_args.resolution[0])
+        width = width or (self.training_args.resolution[1] if self.training else self.eval_args.resolution[1])
+        num_inference_steps = num_inference_steps or (self.training_args.num_inference_steps if self.training else self.eval_args.num_inference_steps)
+        guidance_scale = guidance_scale or (self.training_args.guidance_scale if self.training else self.eval_args.guidance_scale)
         device = self.device
         dtype = self.transformer.dtype
 
@@ -576,6 +564,7 @@ class Flux2Adapter(BaseAdapter):
             [s.image_latent_ids for s in samples],
             dim=0
         ) if samples[0].image_latent_ids is not None else None
+        attention_kwargs = samples[0].extra_kwargs.get('attention_kwargs', None)
 
         latent_ids = self.pipeline._prepare_latent_ids(latents)
 

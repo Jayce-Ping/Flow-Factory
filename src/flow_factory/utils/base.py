@@ -384,3 +384,15 @@ def to_broadcast_tensor(value : Union[int, float, List[int], List[float], torch.
 
     # Adjust shape for broadcasting
     return value.view(-1, *([1] * (len(ref_tensor.shape) - 1)))
+
+
+
+def is_tensor_list(tensor_list: List[torch.Tensor]) -> bool:
+    """
+    Check if the input is a list of torch Tensors.
+    Args:
+        tensor_list (List[torch.Tensor]): list to check
+    Returns:
+        bool: True if all elements are torch Tensors, False otherwise
+    """
+    return isinstance(tensor_list, list) and all(isinstance(t, torch.Tensor) for t in tensor_list)

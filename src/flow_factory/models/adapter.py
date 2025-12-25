@@ -3,7 +3,7 @@ import os
 import json
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple, List, Union, Literal
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from contextlib import contextmanager, nullcontext
 import logging
 
@@ -20,7 +20,7 @@ from peft import get_peft_model, LoraConfig, PeftModel
 from ..ema import EMAModuleWrapper
 from ..scheduler import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput
 from ..hparams import *
-from ..utils.base import filter_kwargs
+from ..utils.base import filter_kwargs, is_tensor_list
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
 logger = logging.getLogger(__name__)
@@ -65,6 +65,23 @@ class BaseSample(BaseOutput):
         d = {k: long_tensor_to_shape(v) for k,v in d.items()}
         return d
 
+    def to(self, device: Union[torch.device, str], depth : int = 1) -> "BaseSample":
+        """Move all tensor fields to specified device."""
+        assert 0 <= depth <= 1, "Only depth 0 and 1 are supported."
+        device = torch.device(device)
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if isinstance(value, torch.Tensor):
+                setattr(self, field.name, value.to(device))
+            elif depth == 1 and is_tensor_list(value):
+                setattr(
+                    self,
+                    field.name,
+                    [t.to(device) if isinstance(t, torch.Tensor) else t for t in value]
+                )
+            
+        return self
+
 
 class BaseAdapter(nn.Module, ABC):
     """
@@ -78,6 +95,7 @@ class BaseAdapter(nn.Module, ABC):
         self.config = config
         self.model_args = config.model_args
         self.training_args = config.training_args
+        self.eval_args = config.eval_args
 
         # Load pipeline and scheduler (delegated to subclasses)
         self.pipeline = self.load_pipeline()
