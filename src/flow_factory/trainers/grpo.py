@@ -11,6 +11,7 @@ import inspect
 import logging
 import numpy as np
 import torch
+from torch.nn.utils.rnn import pad_sequence
 import tqdm as tqdm_
 tqdm = partial(tqdm_.tqdm, dynamic_ncols=True)
 
@@ -129,17 +130,30 @@ class GRPOTrainer(BaseTrainer):
     def compute_advantages(self, samples: List[BaseSample]) -> torch.Tensor:
         """Compute advantages for GRPO."""
 
-        # Get rewards and prompt IDs
+        # 1. Get rewards
         rewards = torch.stack([sample.extra_kwargs['reward'] for sample in samples], dim=0)
         rewards = torch.as_tensor(rewards, device=self.accelerator.device)
+        gathered_rewards = self.accelerator.gather(rewards).cpu().numpy()
+
+        # 2. Gather prompt ids, pad if necessary
+        pad_token_id = self.adapter.tokenizer.pad_token_id or self.adapter.tokenizer.eos_token_id or 0
         prompt_ids = torch.stack([sample.prompt_ids for sample in samples], dim=0)
-        prompt_ids = torch.as_tensor(prompt_ids, device=self.accelerator.device)
+
+        prompt_ids_list = [sample.prompt_ids.to(self.accelerator.device) for sample in samples]
+        prompt_ids = pad_sequence(prompt_ids_list, batch_first=True, padding_value=pad_token_id)
+        if self.accelerator.num_processes > 1:
+            local_max_len = torch.tensor(prompt_ids.shape[1], device=self.accelerator.device)
+            global_max_len = self.accelerator.reduce(local_max_len, reduction="max")
+            
+            if local_max_len < global_max_len:
+                padding_length = global_max_len - local_max_len
+                prompt_ids = torch.nn.functional.pad(prompt_ids, (0, padding_length), value=pad_token_id)
 
         # Gather across processes
         gathered_prompt_ids = self.accelerator.gather(prompt_ids).cpu().numpy()
-        gathered_rewards = self.accelerator.gather(rewards).cpu().numpy()
 
-        # Compute advantages
+
+        # 3. Group rewards by prompt ids and compute advantages
         unique_prompt_ids, group_indices = np.unique(gathered_prompt_ids, axis=0, return_inverse=True)
 
         advantages = np.zeros_like(gathered_rewards, dtype=np.float64)
@@ -160,6 +174,16 @@ class GRPOTrainer(BaseTrainer):
             
             advantages[mask] = (group_rewards - mean) / std
 
+        # 4. Scatter advantages back to samples
+        advantages = torch.as_tensor(advantages).reshape(
+            self.accelerator.num_processes, -1, *advantages.shape[1:]
+        )[self.accelerator.process_index].to(self.accelerator.device)
+
+        # Add advantages to samples
+        for sample, adv in zip(samples, advantages):
+            sample.extra_kwargs['advantage'] = adv
+
+        # 5. Log statistics
         self.log_data(
             {
                 'train/reward_mean': np.mean(gathered_rewards),
@@ -171,14 +195,6 @@ class GRPOTrainer(BaseTrainer):
             },
             step=self.step,
         )
-
-        advantages = torch.as_tensor(advantages).reshape(
-            self.accelerator.num_processes, -1, *advantages.shape[1:]
-        )[self.accelerator.process_index].to(self.accelerator.device)
-
-        # Add advantages to samples
-        for sample, adv in zip(samples, advantages):
-            sample.extra_kwargs['advantage'] = adv
 
         return advantages
 

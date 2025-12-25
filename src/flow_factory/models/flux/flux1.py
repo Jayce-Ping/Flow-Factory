@@ -44,6 +44,17 @@ class Flux1Adapter(BaseAdapter):
             "ff_context.net.0.proj", "ff_context.net.2",
         ]
 
+    # ========================== Tokenizer & Text Encoder ==========================
+    @property
+    def tokenizer(self) -> Any:
+        """Use T5 for longer context length."""
+        return self.pipeline.tokenizer_2
+
+    @property
+    def text_encoder(self) -> Any:
+        """Use T5 text encoder."""
+        return self.pipeline.text_encoder_2
+
     # ======================== Encoding & Decoding ========================
     
     def encode_prompt(self, prompt: Union[str, List[str]], **kwargs) -> Dict[str, Any]:

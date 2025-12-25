@@ -165,7 +165,7 @@ class BaseAdapter(nn.Module, ABC):
     
     @property
     def tokenizer(self) -> Any:
-        """Get the first tokenizer."""
+        """Get the first tokenizer. Or use the one with longest context length."""
         tokenizers = self.tokenizers
         if len(tokenizers) == 0:
             raise ValueError("No tokenizer found in the pipeline.")
