@@ -6,45 +6,66 @@ import hashlib
 import imageio.v3 as iio
 import torch
 from torch.utils.data import Dataset
-from datasets import load_dataset, Dataset as HFDataset
+from datasets import load_dataset, Dataset as HFDataset, concatenate_datasets, load_from_disk
 from PIL import Image
-from collections import defaultdict
 from typing import Optional, Dict, Any, Callable, List, Protocol, Union
 import logging
 from ..utils.base import filter_kwargs
+from datasets.utils.logging import disable_progress_bar
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
 logger = logging.getLogger(__name__)
 
+
+# ========================================================================================
+# Protocol Definitions
+# ========================================================================================
+
 class TextEncodeCallable(Protocol):
+    """Protocol for text encoding functions."""
     def __call__(self, prompt: Union[str, List[str]], **kwargs: Any) -> Dict[str, Any]:
         ...
 
 class ImageEncodeCallable(Protocol):
+    """Protocol for image encoding functions."""
     def __call__(self, image: Union[Image.Image, List[Image.Image]], **kwargs: Any) -> Dict[str, Any]:
         ...
 
 class VideoEncodeCallable(Protocol):
+    """Protocol for video encoding functions."""
     def __call__(self, video: Union[List[Image.Image], List[List[Image.Image]]], **kwargs: Any) -> Dict[str, Any]:
-        """
-        Args:
-            video: A list of PIL Images representing video frames,
-        """
         ...
 
 class PreprocessCallable(Protocol):
+    """Protocol for preprocessing functions that handle multi-modal inputs."""
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]],
-        image: Optional[Union[Image.Image, List[Image.Image]]],
-        video: Optional[Union[List[Image.Image], List[List[Image.Image]]]],
+        images: Optional[Union[Image.Image, List[Image.Image], List[List[Image.Image]]]],
+        videos: Optional[Union[List[Image.Image], List[List[Image.Image]], List[List[List[Image.Image]]]]],
         **kwargs: Any
     ) -> Dict[str, Any]:
         ...
 
+
+# ========================================================================================
+# GeneralDataset Class
+# ========================================================================================
+
 class GeneralDataset(Dataset):
+    """
+    General-purpose dataset for multi-modal data (text, images, videos).
+    
+    Supports:
+    - Loading from JSONL or TXT files
+    - Optional preprocessing with caching
+    - Distributed preprocessing across multiple GPUs
+    - Automatic cache management and merging
+    """
+    
     @staticmethod
     def check_exists(dataset_dir: str, split: str) -> bool:
+        """Check if dataset files exist for a given split."""
         dataset_dir = os.path.expanduser(dataset_dir)
         jsonl_path = os.path.join(dataset_dir, f"{split}.jsonl")
         txt_path = os.path.join(dataset_dir, f"{split}.txt")
@@ -54,22 +75,71 @@ class GeneralDataset(Dataset):
         self,
         dataset_dir: str,
         split: str = "train",
-        cache_dir="~/.cache/flow_factory/datasets",
-        enable_preprocess=True,
-        force_reprocess=False,
-        preprocessing_batch_size=16,
+        cache_dir: str = "~/.cache/flow_factory/datasets",
+        enable_preprocess: bool = True,
+        force_reprocess: bool = False,
+        preprocessing_batch_size: int = 16,
         max_dataset_size: Optional[int] = None,
         preprocess_func: Optional[PreprocessCallable] = None,
         preprocess_kwargs: Optional[Dict[str, Any]] = None,
+        num_shards: Optional[int] = None,
+        shard_index: Optional[int] = None,
         **kwargs
     ):
+        """
+        Initialize GeneralDataset.
+        
+        Args:
+            dataset_dir: Path to dataset directory
+            split: Dataset split ('train', 'test', etc.)
+            cache_dir: Directory for caching preprocessed data
+            enable_preprocess: Whether to enable preprocessing
+            force_reprocess: Force reprocessing even if cache exists
+            preprocessing_batch_size: Batch size for preprocessing
+            max_dataset_size: Limit dataset size to this many samples
+            preprocess_func: Function to preprocess batches
+            preprocess_kwargs: Additional kwargs for preprocess_func
+            num_shards: Total number of shards for distributed preprocessing
+            shard_index: Current shard index (0 to num_shards-1)
+            **kwargs: Additional arguments (ignored)
+        """
         super().__init__()
         self.data_root = os.path.expanduser(dataset_dir)
-        cache_dir = os.path.expanduser(cache_dir)
+        self.cache_dir = os.path.expanduser(cache_dir)
+        self.split = split
+        self.num_shards = num_shards
+        self.shard_index = shard_index
+
+        if self.shard_index > 0:
+            # Disable progress bar for non-main processes
+            disable_progress_bar()
+
+        # Load raw dataset from JSONL or TXT
+        raw_dataset = self._load_raw_dataset()
         
-        # Detect file format (jsonl priority, then txt)
-        jsonl_path = os.path.join(self.data_root, f"{split}.jsonl")
-        txt_path = os.path.join(self.data_root, f"{split}.txt")
+        # Limit dataset size if requested
+        if max_dataset_size is not None and len(raw_dataset) > max_dataset_size:
+            raw_dataset = raw_dataset.select(range(max_dataset_size))
+            logger.info(f"Dataset size limited to {max_dataset_size} samples.")
+        
+        # Preprocess or use raw dataset
+        if enable_preprocess:
+            self.processed_dataset = self._preprocess_dataset(
+                raw_dataset=raw_dataset,
+                preprocess_func=preprocess_func,
+                preprocess_kwargs=preprocess_kwargs or {},
+                preprocessing_batch_size=preprocessing_batch_size,
+                force_reprocess=force_reprocess,
+                max_dataset_size=max_dataset_size,
+            )
+        else:
+            self.processed_dataset = raw_dataset
+            self.merged_cache_path = None
+
+    def _load_raw_dataset(self) -> HFDataset:
+        """Load raw dataset from JSONL or TXT file."""
+        jsonl_path = os.path.join(self.data_root, f"{self.split}.jsonl")
+        txt_path = os.path.join(self.data_root, f"{self.split}.txt")
         
         if os.path.exists(jsonl_path):
             raw_dataset = load_dataset("json", data_files=jsonl_path, split="train")
@@ -85,46 +155,87 @@ class GeneralDataset(Dataset):
         else:
             raise FileNotFoundError(f"Could not find {jsonl_path} or {txt_path}")
         
-        if max_dataset_size is not None and len(raw_dataset) > max_dataset_size:
-            raw_dataset = raw_dataset.select(range(max_dataset_size))
-            logger.info(f"Dataset size limited to {max_dataset_size} samples.")
-    
-        if enable_preprocess:
-            self._preprocess_func = preprocess_func
-            self._preprocess_kwargs = preprocess_kwargs or {}
- 
-            os.makedirs(cache_dir, exist_ok=True)
-            funcs_hash = _compute_encode_funcs_hash(preprocess_func)
-            fingerprint = (
-                f"cache_{os.path.basename(self.data_root)}_{split}_"
-                f"cutoff{max_dataset_size if max_dataset_size else 'full'}_"
-                f"{funcs_hash}"
-            )
-            
-            self.processed_dataset = raw_dataset.map(
-                self._preprocess_batch,
-                batched=True,
-                batch_size=preprocessing_batch_size,
-                fn_kwargs={
-                    "image_dir": self.image_dir,
-                    "video_dir": self.video_dir,
-                },
-                remove_columns=raw_dataset.column_names,
-                new_fingerprint=fingerprint,
-                desc="Pre-processing dataset",
-                load_from_cache_file=not force_reprocess,
-            )
-            
-            try:
-                self.processed_dataset.set_format(type="torch", columns=self.processed_dataset.column_names)
-            except Exception:
-                pass
+        return raw_dataset
 
+    def _preprocess_dataset(
+        self,
+        raw_dataset: HFDataset,
+        preprocess_func: PreprocessCallable,
+        preprocess_kwargs: Dict[str, Any],
+        preprocessing_batch_size: int,
+        force_reprocess: bool,
+        max_dataset_size: Optional[int],
+    ) -> HFDataset:
+        """
+        Apply preprocessing to raw dataset with caching.
+        
+        Returns:
+            Preprocessed HuggingFace Dataset
+        """
+        self._preprocess_func = preprocess_func
+        self._preprocess_kwargs = preprocess_kwargs
+        
+        # Compute cache path
+        funcs_hash = _compute_encode_funcs_hash(preprocess_func)
+        kwargs_hash = hashlib.md5(str(sorted(preprocess_kwargs.items())).encode()).hexdigest()[:8]
+        
+        self.merged_cache_path = os.path.join(
+            self.cache_dir,
+            f"{os.path.basename(self.data_root)}_{self.split}_"
+            f"cutoff{max_dataset_size if max_dataset_size else 'full'}_"
+            f"{funcs_hash}_{kwargs_hash}"
+        )
+        
+        # Shard dataset if distributed
+        if self.num_shards and self.num_shards > 1:
+            raw_dataset = self._shard_dataset(raw_dataset, self.shard_index, self.num_shards)
+            shard_fingerprint = f"{os.path.basename(self.merged_cache_path)}_shard{self.shard_index}of{self.num_shards-1}"
+            desc = f"[Preprocessing {self.split} dataset] Shard {self.shard_index}/{self.num_shards-1}"
         else:
-            self._text_encode_func = None
-            self._image_encode_func = None
-            self._video_encode_func = None
-            self.processed_dataset = raw_dataset
+            shard_fingerprint = os.path.basename(self.merged_cache_path)
+            desc = f"[Preprocessing {self.split} dataset]"
+        
+        os.makedirs(self.cache_dir, exist_ok=True)
+        
+        # Apply preprocessing with caching
+        processed_dataset = raw_dataset.map(
+            self._preprocess_batch,
+            batched=True,
+            batch_size=preprocessing_batch_size,
+            fn_kwargs={
+                "image_dir": self.image_dir,
+                "video_dir": self.video_dir,
+            },
+            remove_columns=raw_dataset.column_names,
+            new_fingerprint=shard_fingerprint,
+            desc=desc,
+            load_from_cache_file=not force_reprocess,
+        )
+        
+        # Set format to PyTorch tensors
+        try:
+            processed_dataset.set_format(type="torch", columns=processed_dataset.column_names)
+        except Exception:
+            pass
+        
+        return processed_dataset
+
+    def _shard_dataset(self, dataset: HFDataset, shard_index: int, num_shards: int) -> HFDataset:
+        """
+        Split dataset into shards for distributed preprocessing.
+        
+        Args:
+            dataset: Full dataset to shard
+            shard_index: Index of current shard (0 to num_shards-1)
+            num_shards: Total number of shards
+            
+        Returns:
+            Sharded subset of the dataset
+        """
+        shard_size = len(dataset) // num_shards
+        start_idx = shard_index * shard_size
+        end_idx = start_idx + shard_size if shard_index < num_shards - 1 else len(dataset)
+        return dataset.select(range(start_idx, end_idx))
 
     def _preprocess_batch(
         self,
@@ -132,22 +243,38 @@ class GeneralDataset(Dataset):
         image_dir: Optional[str],
         video_dir: Optional[str],
     ) -> Dict[str, Any]:
-        assert self._preprocess_func is not None, "Preprocess function must be provided for preprocessing."
-    
-        # 1. Prepare prompt inputs
+        """
+        Preprocess a batch of samples.
+        
+        Workflow:
+            1. Prepare prompt inputs (text)
+            2. Load and prepare image inputs
+            3. Load and prepare video inputs
+            4. Call preprocess function
+            5. Move tensors to CPU for caching
+            
+        Args:
+            batch: Dictionary with batch data
+            image_dir: Directory containing images (if applicable)
+            video_dir: Directory containing videos (if applicable)
+            
+        Returns:
+            Dictionary with preprocessed data
+        """
+        assert self._preprocess_func is not None, "Preprocess function must be provided."
+        
+        # 1. Prepare prompt inputs (text)
         prompt = batch["prompt"]
         negative_prompt = batch.get("negative_prompt", None)
-        prompt_args = {'prompt': prompt} if negative_prompt is None else {'prompt': prompt, 'negative_prompt': negative_prompt}
+        prompt_args = {'prompt': prompt}
+        if negative_prompt is not None:
+            prompt_args['negative_prompt'] = negative_prompt
         
         # 2. Prepare image inputs (only when image_dir exists and batch has images)
         if 'image' in batch:
-            # Rename 'image' key to 'images' for consistency
-            batch['images'] = batch.pop('image')
+            batch['images'] = batch.pop('image')  # Rename for consistency
 
-        image_args : Dict[
-            str,
-            Optional[List[List[Image.Image]]]
-        ] = {'images': []}
+        image_args = {'images': None}
         if image_dir is not None and "images" in batch:
             img_paths_list = batch["images"]
             image_args['images'] = []
@@ -158,24 +285,16 @@ class GeneralDataset(Dataset):
                 else:
                     if isinstance(img_paths, str):
                         img_paths = [img_paths]
-                    
                     image_args['images'].append([
                         Image.open(os.path.join(image_dir, img_path)).convert("RGB") 
                         for img_path in img_paths
                     ])
-        else:
-            image_args['images'] = None
-
 
         # 3. Prepare video inputs (only when video_dir exists and batch has videos)
         if 'video' in batch:
-            # Rename 'video' key to 'videos' for consistency
-            batch['videos'] = batch.pop('video')
+            batch['videos'] = batch.pop('video')  # Rename for consistency
 
-        video_args : Dict[
-            str,
-            Optional[List[List[List[Image.Image]]]]
-        ] = {'videos': []}
+        video_args = {'videos': None}
         if video_dir is not None and "videos" in batch:
             video_paths_list = batch["videos"]
             video_args['videos'] = []
@@ -186,27 +305,17 @@ class GeneralDataset(Dataset):
                 else:
                     if isinstance(video_paths, str):
                         video_paths = [video_paths]
-                    
                     video_args['videos'].append([
                         load_video_frames(os.path.join(video_dir, video_path))
                         for video_path in video_paths
                     ])
-        else:
-            video_args['videos'] = None
 
-        # 4. Merge results
+        # 4. Call preprocess function with filtered kwargs
         input_args = {**prompt_args, **image_args, **video_args, **self._preprocess_kwargs}
-        preprocess_res = self._preprocess_func(**input_args)
+        filtered_args = filter_kwargs(self._preprocess_func, **input_args)
+        preprocess_res = self._preprocess_func(**filtered_args)
 
-        # Warn if there are overlapping keys
-        # Latter keys override former keys if any overlap
-        key_intersection = set(batch.keys()).intersection(set(preprocess_res.keys()))
-        if key_intersection:
-            logger.warning(
-                f"Preprocess function returned keys that overlap with original batch: {key_intersection}. "
-                f"Latter keys will override former keys."
-            )
-
+        # 5. Process results - move tensors to CPU for caching
         final_res = {}
         for k, v in preprocess_res.items():
             if isinstance(v, torch.Tensor):
@@ -217,15 +326,76 @@ class GeneralDataset(Dataset):
             elif isinstance(v, list):
                 # Case B: Ragged List (e.g. Flux image latents of varying sizes)
                 # Check contents and move tensors to CPU if found
-                final_res[k] = [
-                    x.cpu() if isinstance(x, torch.Tensor) else x 
-                    for x in v
-                ]
+                final_res[k] = [x.cpu() if isinstance(x, torch.Tensor) else x for x in v]
             else:
                 # Case C: Other types (None, int, etc)
                 final_res[k] = v
 
         return {**batch, **final_res}
+
+    @classmethod
+    def load_merged(cls, merged_cache_path: str) -> "GeneralDataset":
+        """
+        Load preprocessed dataset from merged cache.
+        
+        Args:
+            merged_cache_path: Path to merged cache directory
+            
+        Returns:
+            GeneralDataset instance with loaded data
+        """
+        instance = cls.__new__(cls)
+        instance.processed_dataset = load_from_disk(merged_cache_path)
+        try:
+            instance.processed_dataset.set_format(type="torch", columns=instance.processed_dataset.column_names)
+        except Exception:
+            pass
+        return instance
+    
+    @staticmethod
+    def compute_cache_path(
+        dataset_dir: str,
+        split: str,
+        cache_dir: str,
+        max_dataset_size: Optional[int],
+        preprocess_func: Optional[Callable],
+        preprocess_kwargs: Optional[Dict[str, Any]],
+    ) -> str:
+        """
+        Compute merged cache path without creating dataset instance.
+        
+        Args:
+            dataset_dir: Path to dataset directory
+            split: Dataset split name
+            cache_dir: Cache directory
+            max_dataset_size: Maximum dataset size
+            preprocess_func: Preprocessing function
+            preprocess_kwargs: Preprocessing kwargs
+            
+        Returns:
+            Path to merged cache directory
+        """
+        funcs_hash = _compute_encode_funcs_hash(preprocess_func)
+        kwargs_hash = hashlib.md5(
+            str(sorted((preprocess_kwargs or {}).items())).encode()
+        ).hexdigest()[:8]
+        
+        return os.path.join(
+            os.path.expanduser(cache_dir),
+            f"{os.path.basename(dataset_dir)}_{split}_"
+            f"cutoff{max_dataset_size if max_dataset_size else 'full'}_"
+            f"{funcs_hash}_{kwargs_hash}"
+        )
+
+    def save_shard(self, shard_path: str):
+        """
+        Save current shard to disk for merging.
+        
+        Args:
+            shard_path: Path to save shard
+        """
+        self.processed_dataset.save_to_disk(shard_path)
+        logger.info(f"Saved shard to {shard_path}")
 
     def __len__(self):
         return len(self.processed_dataset)
@@ -235,13 +405,22 @@ class GeneralDataset(Dataset):
     
     @staticmethod
     def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Collate function for DataLoader.
+        
+        Stacks tensors with same shape, keeps ragged tensors as lists.
+        
+        Args:
+            batch: List of samples
+            
+        Returns:
+            Collated batch dictionary
+        """
         if not batch:
             return {}
 
         collated_batch = {}
-        keys = batch[0].keys()
-
-        for key in keys:
+        for key in batch[0].keys():
             values = [sample[key] for sample in batch]
             
             # Check if values are tensors
@@ -260,14 +439,21 @@ class GeneralDataset(Dataset):
         return collated_batch
 
 
+# ========================================================================================
+# Utility Functions
+# ========================================================================================
+
 def load_video_frames(video_path: str, fps: Optional[int] = None) -> List[Image.Image]:
     """
-    Load video frames from a video file using imageio.
+    Load video frames using imageio (diffusers standard).
     
     Args:
-        video_path: Path to the video file.
-        fps: If specified, resample the video to this frame rate.
-    """    
+        video_path: Path to video file
+        fps: If specified, resample video to this frame rate
+        
+    Returns:
+        List of PIL Images representing video frames
+    """
     frames = [Image.fromarray(frame) for frame in iio.imread(video_path)]
     
     if fps is not None:
@@ -280,32 +466,28 @@ def load_video_frames(video_path: str, fps: Optional[int] = None) -> List[Image.
     
     return frames
 
+
 def _compute_function_hash(func: Optional[Callable], digits: int = 16) -> str:
     """
-    Compute a stable hash value for a callable function to use in cache fingerprints.
+    Compute stable hash for function caching.
     
     Strategy (fallback chain):
-    1. Use function source code (most accurate)
-    2. Fall back to module path + function name (for compatibility)
-    3. Final fallback to object ID (unstable but always works)
+        1. Use function source code (most accurate)
+        2. Fall back to module path + function name (for compatibility)
+        3. Final fallback to object ID (unstable but always works)
     
     Args:
-        func: The callable to compute hash for, can be None
-    
+        func: Function to hash (can be None)
+        digits: Number of hash digits to return
+        
     Returns:
-        A 16-character hexadecimal hash string
-    
-    Examples:
-        >>> def my_func(x): return x * 2
-        >>> hash1 = _compute_function_hash(my_func)
-        >>> hash2 = _compute_function_hash(None)
-        >>> hash1 != hash2
-        True
+        Hexadecimal hash string
     """
     _MAX_DIGITS = 32
     digits = min(digits, _MAX_DIGITS)
+    
     if func is None:
-        return "none" * 4  # "nonenonenoneone" - stable identifier for None
+        return "none" * 4  # Stable identifier for None
     
     try:
         # Method 1: Get function source code (most reliable)
@@ -329,39 +511,20 @@ def _compute_function_hash(func: Optional[Callable], digits: int = 16) -> str:
 
 def _compute_encode_funcs_hash(*funcs: Optional[Callable], digits: int = 16) -> str:
     """
-    Compute a joint hash value for multiple encoding functions.
+    Compute joint hash for multiple functions.
     
-    This ensures that cache is invalidated when any preprocessing logic changes,
-    while allowing cache reuse when logic remains the same.
+    Ensures cache is invalidated when any preprocessing logic changes.
     
     Args:
-        *funcs: Variable number of callables (encoding functions)
-                Can include None values which will be handled gracefully
-    
-    Returns:
-        A 16-character hexadecimal hash string representing the joint hash
-    
-    Examples:
-        >>> hash1 = _compute_encode_funcs_hash(text_enc, image_enc, None)
-        >>> hash2 = _compute_encode_funcs_hash(text_enc, image_enc, video_enc)
-        >>> hash1 != hash2  # Different because third function changed
-        True
+        *funcs: Variable number of functions to hash
+        digits: Number of hash digits to return
         
-        >>> # Same functions produce same hash
-        >>> hash3 = _compute_encode_funcs_hash(text_enc, image_enc, None)
-        >>> hash1 == hash3
-        True
+    Returns:
+        Hexadecimal hash string representing joint hash
     """
     _MAX_DIGITS = 32
     digits = min(digits, _MAX_DIGITS)
-    # Compute individual hashes for each function
     individual_hashes = [_compute_function_hash(func) for func in funcs]
-    
-    # Combine hashes with labels for clarity in debugging
     combined_parts = [f"func{i}:{hash_val}" for i, hash_val in enumerate(individual_hashes)]
     combined = "|".join(combined_parts)
-    
-    # Generate final joint hash
-    joint_hash = hashlib.md5(combined.encode()).hexdigest()[:digits]
-    
-    return joint_hash
+    return hashlib.md5(combined.encode()).hexdigest()[:digits]

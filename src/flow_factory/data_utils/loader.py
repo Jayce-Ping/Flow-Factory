@@ -2,49 +2,155 @@
 import os
 from typing import Union, Tuple, Optional
 import torch
-import torch.distributed as dist
 from torch.utils.data import DataLoader
 from accelerate import Accelerator
+from datasets import concatenate_datasets, load_from_disk
 from .dataset import GeneralDataset
 from .sampler import DistributedKRepeatSampler
-from ..hparams import *
-from ..data_utils.dataset import TextEncodeCallable, ImageEncodeCallable, VideoEncodeCallable, PreprocessCallable
+from ..hparams import Arguments
+from ..data_utils.dataset import PreprocessCallable
 from ..utils.base import filter_kwargs
+import logging
 
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+logger = logging.getLogger(__name__)
+
+
+def _create_or_load_dataset(
+    split: str,
+    accelerator: Accelerator,
+    base_kwargs: dict,
+    enable_distributed: bool,
+) -> GeneralDataset:
+    """
+    Create or load preprocessed dataset with optional distributed sharding.
+    
+    Workflow:
+        1. Compute cache path without creating dataset
+        2. If merged cache exists → load directly (fast path)
+        3. Otherwise:
+           a. Single-process: preprocess directly
+           b. Multi-process: shard → preprocess → merge → load
+    
+    Args:
+        split: Dataset split ('train', 'test', etc.)
+        accelerator: Accelerator for distributed coordination
+        base_kwargs: Base arguments for GeneralDataset
+        enable_distributed: Whether to use distributed preprocessing
+        
+    Returns:
+        GeneralDataset instance (fully preprocessed and ready for training)
+    """
+    # Setup shard parameters
+    kwargs = base_kwargs.copy()
+    if enable_distributed:
+        kwargs['num_shards'] = accelerator.num_processes
+        kwargs['shard_index'] = accelerator.process_index
+    else:
+        kwargs['num_shards'] = None
+        kwargs['shard_index'] = None
+    
+    # Compute cache path WITHOUT creating dataset (avoids unnecessary preprocessing)
+    merged_cache_path = GeneralDataset.compute_cache_path(
+        dataset_dir=kwargs['dataset_dir'],
+        split=split,
+        cache_dir=kwargs.get('cache_dir', '~/.cache/flow_factory/datasets'),
+        max_dataset_size=kwargs.get('max_dataset_size'),
+        preprocess_func=kwargs.get('preprocess_func'),
+        preprocess_kwargs=kwargs.get('preprocess_kwargs'),
+    )
+    
+    # Fast path: merged cache already exists
+    if os.path.exists(merged_cache_path):
+        if accelerator.is_main_process:
+            logger.info(f"Loading {split} dataset from merged cache: {merged_cache_path}")
+        return GeneralDataset.load_merged(merged_cache_path)
+    
+    # Single-process path: direct preprocessing
+    if not enable_distributed:
+        logger.info(f"Preprocessing {split} dataset (single process)")
+        return GeneralDataset(split=split, **kwargs)
+    
+    # Distributed path: shard → merge → load
+    logger.info(f"Preprocessing {split} dataset shard {kwargs['shard_index']}/{kwargs['num_shards']}")
+    dataset = GeneralDataset(split=split, **kwargs)
+    
+    # Step 1: Save shard to disk
+    shard_path = os.path.join(
+        dataset.cache_dir,
+        f"{os.path.basename(merged_cache_path)}_shard{kwargs['shard_index']}"
+    )
+    dataset.save_shard(shard_path)
+    accelerator.wait_for_everyone()
+    
+    # Step 2: Main process merges all shards
+    if accelerator.is_main_process:
+        logger.info(f"Merging {kwargs['num_shards']} shards for {split} split")
+        shards = [
+            load_from_disk(
+                os.path.join(dataset.cache_dir, f"{os.path.basename(merged_cache_path)}_shard{i}")
+            )
+            for i in range(kwargs['num_shards'])
+        ]
+        merged = concatenate_datasets(shards)
+        merged.save_to_disk(merged_cache_path)
+        logger.info(f"Merged {split} dataset saved to {merged_cache_path}")
+    
+    accelerator.wait_for_everyone()
+    
+    # Step 3: All processes load merged dataset
+    return GeneralDataset.load_merged(merged_cache_path)
+
 
 def get_dataloader(
-    config : Arguments,
-    accelerator : Accelerator,
-    preprocess_func : Optional[PreprocessCallable] = None,
+    config: Arguments,
+    accelerator: Accelerator,
+    preprocess_func: Optional[PreprocessCallable] = None,
     **kwargs,
 ) -> Tuple[DataLoader, Union[DataLoader, None]]:
     """
-    Factory to create the DDP/FSDP compatible DataLoader.
+    Factory to create DDP/FSDP compatible DataLoader with distributed preprocessing.
+    
+    Features:
+        - Automatic distributed preprocessing across multiple GPUs
+        - Intelligent caching (reuses preprocessed data on subsequent runs)
+        - Supports both train and test splits
+        - Custom sampler for GRPO-style grouped sampling
+    
+    Args:
+        config: Configuration object containing all arguments
+        accelerator: Accelerator for distributed training
+        preprocess_func: Function to preprocess batches
+        **kwargs: Additional arguments (ignored)
+        
+    Returns:
+        Tuple of (train_dataloader, test_dataloader)
+        test_dataloader is None if test split doesn't exist
     """
     data_args = config.data_args
     training_args = config.training_args
     eval_args = config.eval_args
 
-    # 1. Initialize Dataset (Now handles tokenization internally)
-    dataset_init_kwargs = {
-        "preprocess_func": preprocess_func,
-        'preprocess_kwargs': filter_kwargs(preprocess_func, **data_args) if preprocess_func else None,
-    }
-    dataset_init_kwargs.update(filter_kwargs(GeneralDataset.__init__, **data_args))
-    # Only the main process handles preprocessing and caching
-    dataset_init_kwargs['force_reprocess'] = data_args.force_reprocess and accelerator.is_main_process
-    dataset = GeneralDataset(
-        split="train",
-        **dataset_init_kwargs,
-    )
-    if GeneralDataset.check_exists(data_args.dataset, "test"):
-        test_dataset = GeneralDataset(
-            split="test",
-            **dataset_init_kwargs,
-        )
+    # Determine if distributed preprocessing is needed
+    enable_distributed = accelerator.num_processes > 1 and data_args.enable_preprocess
 
-    # 3. Initialize GRPO Sampler (Logic Unchanged)
+    # Common dataset kwargs
+    base_kwargs = {
+        "preprocess_func": preprocess_func,
+        "preprocess_kwargs": filter_kwargs(preprocess_func, **data_args.to_dict()) if preprocess_func else None,
+    }
+    base_kwargs.update(filter_kwargs(GeneralDataset.__init__, **data_args.to_dict()))
+    base_kwargs['force_reprocess'] = data_args.force_reprocess
+
+    # === CREATE/LOAD TRAIN DATASET ===
+    dataset = _create_or_load_dataset(
+        split="train",
+        accelerator=accelerator,
+        base_kwargs=base_kwargs,
+        enable_distributed=enable_distributed,
+    )
+
+    # === CREATE TRAIN DATALOADER ===
     sampler = DistributedKRepeatSampler(
         dataset=dataset,
         batch_size=training_args.per_device_batch_size,
@@ -55,7 +161,6 @@ def get_dataloader(
         seed=training_args.seed
     )
     
-    # 4. Build DataLoader
     dataloader = DataLoader(
         dataset,
         batch_sampler=sampler,
@@ -63,7 +168,17 @@ def get_dataloader(
         pin_memory=True,
         collate_fn=GeneralDataset.collate_fn,
     )
+
+    # === CREATE/LOAD TEST DATASET ===
+    test_dataloader = None
     if GeneralDataset.check_exists(data_args.dataset, "test"):
+        test_dataset = _create_or_load_dataset(
+            split="test",
+            accelerator=accelerator,
+            base_kwargs=base_kwargs,
+            enable_distributed=enable_distributed,
+        )
+        
         test_dataloader = DataLoader(
             test_dataset,
             batch_size=eval_args.per_device_batch_size,
@@ -71,7 +186,5 @@ def get_dataloader(
             num_workers=data_args.dataloader_num_workers,
             collate_fn=GeneralDataset.collate_fn,
         )
-    else:
-        test_dataloader = None
 
     return dataloader, test_dataloader
