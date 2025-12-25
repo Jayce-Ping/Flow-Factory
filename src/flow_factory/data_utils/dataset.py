@@ -3,6 +3,7 @@ import os
 import inspect
 import hashlib
 
+import imageio.v3 as iio
 import torch
 from torch.utils.data import Dataset
 from datasets import load_dataset, Dataset as HFDataset
@@ -10,6 +11,7 @@ from PIL import Image
 from collections import defaultdict
 from typing import Optional, Dict, Any, Callable, List, Protocol, Union
 import logging
+from ..utils.base import filter_kwargs
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
 logger = logging.getLogger(__name__)
@@ -23,14 +25,10 @@ class ImageEncodeCallable(Protocol):
         ...
 
 class VideoEncodeCallable(Protocol):
-    def __call__(self, video: Union[str, List[str]], **kwargs: Any) -> Dict[str, Any]:
+    def __call__(self, video: Union[List[Image.Image], List[List[Image.Image]]], **kwargs: Any) -> Dict[str, Any]:
         """
         Args:
-            video: Path(s) to video file(s)
-        Returns:
-            Dict with encoded video tensors, typically:
-            - 'video': torch.Tensor of shape (T, C, H, W) or (C, T, H, W)
-            - 'num_frames': int
+            video: A list of PIL Images representing video frames,
         """
         ...
 
@@ -39,7 +37,7 @@ class PreprocessCallable(Protocol):
         self,
         prompt: Optional[Union[str, List[str]]],
         image: Optional[Union[Image.Image, List[Image.Image]]],
-        video: Optional[Union[str, List[str]]],
+        video: Optional[Union[List[Image.Image], List[List[Image.Image]]]],
         **kwargs: Any
     ) -> Dict[str, Any]:
         ...
@@ -62,6 +60,7 @@ class GeneralDataset(Dataset):
         preprocessing_batch_size=16,
         max_dataset_size: Optional[int] = None,
         preprocess_func: Optional[PreprocessCallable] = None,
+        preprocess_kwargs: Optional[Dict[str, Any]] = None,
         **kwargs
     ):
         super().__init__()
@@ -92,7 +91,8 @@ class GeneralDataset(Dataset):
     
         if enable_preprocess:
             self._preprocess_func = preprocess_func
-            
+            self._preprocess_kwargs = preprocess_kwargs or {}
+ 
             os.makedirs(cache_dir, exist_ok=True)
             funcs_hash = _compute_encode_funcs_hash(preprocess_func)
             fingerprint = (
@@ -134,7 +134,6 @@ class GeneralDataset(Dataset):
     ) -> Dict[str, Any]:
         assert self._preprocess_func is not None, "Preprocess function must be provided for preprocessing."
     
-        
         # 1. Prepare prompt inputs
         prompt = batch["prompt"]
         negative_prompt = batch.get("negative_prompt", None)
@@ -154,7 +153,7 @@ class GeneralDataset(Dataset):
             image_args['images'] = []
             for img_paths in img_paths_list:
                 if not img_paths:
-                    # img_paths is [] or None
+                    # Add [] for consistency, each sample has a list of images (even empty)
                     image_args['images'].append([])
                 else:
                     if isinstance(img_paths, str):
@@ -175,28 +174,28 @@ class GeneralDataset(Dataset):
 
         video_args : Dict[
             str,
-            Optional[List[List[str]]]
+            Optional[List[List[List[Image.Image]]]]
         ] = {'videos': []}
         if video_dir is not None and "videos" in batch:
             video_paths_list = batch["videos"]
             video_args['videos'] = []
             for video_paths in video_paths_list:
                 if not video_paths:
-                    # video_paths is [] or None
+                    # Add [] for consistency, each sample has a list of videos (even empty)
                     video_args['videos'].append([])
                 else:
                     if isinstance(video_paths, str):
                         video_paths = [video_paths]
                     
                     video_args['videos'].append([
-                        os.path.join(video_dir, video_path) 
+                        load_video_frames(os.path.join(video_dir, video_path))
                         for video_path in video_paths
                     ])
         else:
             video_args['videos'] = None
 
         # 4. Merge results
-        input_args = {**prompt_args, **image_args, **video_args}
+        input_args = {**prompt_args, **image_args, **video_args, **self._preprocess_kwargs}
         preprocess_res = self._preprocess_func(**input_args)
 
         # Warn if there are overlapping keys
@@ -260,6 +259,26 @@ class GeneralDataset(Dataset):
 
         return collated_batch
 
+
+def load_video_frames(video_path: str, fps: Optional[int] = None) -> List[Image.Image]:
+    """
+    Load video frames from a video file using imageio.
+    
+    Args:
+        video_path: Path to the video file.
+        fps: If specified, resample the video to this frame rate.
+    """    
+    frames = [Image.fromarray(frame) for frame in iio.imread(video_path)]
+    
+    if fps is not None:
+        # Uniform resampling based on target fps
+        metadata = iio.immeta(video_path)
+        original_fps = metadata.get('fps', 30)
+        step = original_fps / fps
+        indices = [int(i * step) for i in range(int(len(frames) / step))]
+        frames = [frames[i] for i in indices if i < len(frames)]
+    
+    return frames
 
 def _compute_function_hash(func: Optional[Callable], digits: int = 16) -> str:
     """

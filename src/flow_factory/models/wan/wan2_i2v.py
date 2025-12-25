@@ -5,7 +5,7 @@ import os
 from typing import Union, List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 import torch
-from diffusers.pipelines.wan.pipeline_wan import WanPipeline
+from diffusers.pipelines.wan.pipeline_wan_i2v import WanImageToVideoPipeline
 from PIL import Image
 import logging
 
@@ -24,12 +24,12 @@ class WanSample(BaseSample):
     pass
 
 
-class Wan22_I2V_Adapter(BaseAdapter):
+class Wan2_I2V_Adapter(BaseAdapter):
     def __init__(self, config: Arguments):
         super().__init__(config)
     
-    def load_pipeline(self) -> WanPipeline:
-        return WanPipeline.from_pretrained(
+    def load_pipeline(self) -> WanImageToVideoPipeline:
+        return WanImageToVideoPipeline.from_pretrained(
             self.model_args.model_name_or_path,
             low_cpu_mem_usage=False
         )

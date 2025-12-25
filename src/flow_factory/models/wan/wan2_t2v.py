@@ -24,7 +24,7 @@ class WanSample(BaseSample):
     pass
 
 
-class Wan22_T2V_Adapter(BaseAdapter):
+class Wan2_T2V_Adapter(BaseAdapter):
     def __init__(self, config: Arguments):
         super().__init__(config)
     

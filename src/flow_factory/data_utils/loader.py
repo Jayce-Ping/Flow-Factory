@@ -29,8 +29,9 @@ def get_dataloader(
     # 1. Initialize Dataset (Now handles tokenization internally)
     dataset_init_kwargs = {
         "preprocess_func": preprocess_func,
+        'preprocess_kwargs': filter_kwargs(preprocess_func, **data_args) if preprocess_func else None,
     }
-    dataset_init_kwargs.update(filter_kwargs(GeneralDataset.__init__, **data_args.to_dict()))
+    dataset_init_kwargs.update(filter_kwargs(GeneralDataset.__init__, **data_args))
     # Only the main process handles preprocessing and caching
     dataset_init_kwargs['force_reprocess'] = data_args.force_reprocess and accelerator.is_main_process
     dataset = GeneralDataset(

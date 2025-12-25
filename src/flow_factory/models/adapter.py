@@ -341,7 +341,7 @@ class BaseAdapter(nn.Module, ABC):
         if trainable_count > 0:
             logger.info(f"Set {trainable_count} trainable parameters to {master_dtype}")
 
-    def apply_lora(self):
+    def apply_lora(self, target_module : str = 'transformer') -> PeftModel:
         """Apply LoRA adapters to the model if specified."""
         lora_config = LoraConfig(
             r=self.model_args.lora_rank,
@@ -349,10 +349,12 @@ class BaseAdapter(nn.Module, ABC):
             init_lora_weights="gaussian",
             target_modules=self.default_target_modules,
         )
-        self.transformer = get_peft_model(self.transformer, lora_config)
-        
-        return self.transformer
+        target = getattr(self, target_module)
 
+        target = get_peft_model(target, lora_config)
+        setattr(self, target_module, target)
+        
+        return target
 
     def load_checkpoint(self, path: str):
         """
@@ -527,8 +529,8 @@ class BaseAdapter(nn.Module, ABC):
     def preprocess_func(
         self,
         prompt : Optional[List[str]] = None,
-        images : Optional[Union[List[Image.Image], List[List[Image.Image]]]] = None,
-        videos : Optional[Union[List[Any], List[List[Any]]]] = None,
+        images : Optional[List[Union[Image.Image, List[Image.Image]]]] = None,
+        videos : Optional[List[Union[List[Image.Image], List[List[Image.Image]]]]] = None,
         **kwargs,
     ) -> Dict[str, Union[List[Any], torch.Tensor]]:
         """
@@ -589,7 +591,7 @@ class BaseAdapter(nn.Module, ABC):
             images:
                 - Single Image.Image
                 - List[Image.Image]: list of images (a batch of single images)
-                - List[List[Image.Image]]: list of list of images (a batch of multiple images)
+                - List[List[Image.Image]]: list of list of images (a batch of multiple condition images)
 
         NOTE:
             The determination of input `images` type is based on:
@@ -602,21 +604,21 @@ class BaseAdapter(nn.Module, ABC):
     @abstractmethod
     def encode_video(
         self,
-        videos: Union[Any, List[Any], List[List[Any]]],
+        videos: Union[List[Image.Image], List[List[Image.Image]], List[List[List[Image.Image]]]],
         **kwargs,
     ) -> Dict[str, Union[List[Any], torch.Tensor]]:
         """
         Encodes input videos into latent representations if applicable.
         Args:
             videos:
-                - Single video input
-                - List[Any]: list of videos (A batch of single videos)
-                - List[List[Any]]: list of list of videos (A batch of multiple videos)
+                - List[Image.Image]: Single video input
+                - List[List[Image.Image]]: list of videos (A batch of videos)
+                - List[List[List[Image.Image]]]: list of list of videos (A batch of multiple condition videos)
         NOTE:
             The determination of input `videos` type should be based on:
-                - if not isinstance(videos, list): single video
-                - elif isinstance(videos, list) and all(not isinstance(v, list) for v in videos): list of single videos
-                - elif isinstance(videos, list) and all(isinstance(v, list) for v in videos): list of list of videos
+                - if isinstance(videos, list) and all(isinstance(frame, Image.Image) for frame in videos): single video
+                - elif isinstance(videos, list) and all(isinstance(frames, list) for frames in videos): list of videos
+                - elif isinstance(videos, list) and all(isinstance(videos_list, list) for videos_list in videos): list of list of videos
         """
         pass
 
