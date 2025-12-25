@@ -151,7 +151,12 @@ class GRPOTrainer(BaseTrainer):
 
         # Gather across processes
         gathered_prompt_ids = self.accelerator.gather(prompt_ids).cpu().numpy()
-
+        decoded_prompts = self.adapter.tokenizer.batch_decode(
+            gathered_prompt_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
+        )
+        print("Decoded prompts:", decoded_prompts)
 
         # 3. Group rewards by prompt ids and compute advantages
         unique_prompt_ids, group_indices = np.unique(gathered_prompt_ids, axis=0, return_inverse=True)

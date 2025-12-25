@@ -16,7 +16,7 @@ data:
   dataloader_num_workers: 16  # Number of workers for DataLoader
   enable_preprocess: true  # Enable dataset preprocessing
   force_reprocess: true  # Force reprocessing of the dataset
-  max_dataset_size: 32  # Limit the maximum number of samples in the dataset
+  max_dataset_size: 64  # Limit the maximum number of samples in the dataset
 
 # Model Configuration
 model:
@@ -41,7 +41,7 @@ train:
   
   # Batch and sampling
   per_device_batch_size: 2  # Batch size per device
-  group_size: 1  # Group size for GRPO sampling
+  group_size: 2  # Group size for GRPO sampling
   global_std: false  # Use global std for advantage normalization
   unique_sample_num_per_epoch: 4  # Unique samples per group
   gradient_step_per_epoch: 2  # Gradient steps per epoch
