@@ -1,6 +1,6 @@
 # Environment Configuration
 launcher: "accelerate"  # Options: accelerate
-config_file: config/accelerate_configs/deepspeed_zero2.yaml  # Path to distributed config file (optional)
+config_file: config/accelerate_configs/multi_gpu.yaml  # Path to distributed config file (optional)
 num_processes: 8  # Number of processes to launch (overrides config file)
 main_process_port: 29500
 mixed_precision: "bf16"  # Options: no, fp16, bf16
@@ -33,8 +33,9 @@ model:
 # Training Configuration
 train:
   # Training settings
+  trainer_type: 'grpo'
   enable_gradient_checkpointing: false  # Enable gradient checkpointing to save memory with extra compute
-  save_freq: 0  # Save frequency in epochs (0 to disable)
+  save_freq: 20  # Save frequency in epochs (0 to disable)
   save_dir: "~/jcy/Flow-Factory"  # Directory for logs and checkpoints
 
   # Image settings
@@ -78,7 +79,7 @@ eval:
   seed: 42  # Eval seed
   guidance_scale: 4  # Guidance scale for sampling
   num_inference_steps: 50  # Number of eval timesteps
-  eval_freq: 10  # Eval frequency in epochs (0 to disable)
+  eval_freq: 20  # Eval frequency in epochs (0 to disable)
 
 # Reward Model Configuration
 reward:

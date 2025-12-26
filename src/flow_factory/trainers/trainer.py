@@ -56,10 +56,6 @@ class BaseTrainer(ABC):
         """Log data using the initialized logger."""
         if self.logger is not None:
             self.logger.log_data(data, step=step)
-
-    @property
-    def unwrapped_transformer(self) -> BaseAdapter:
-        return self.accelerator.unwrap_model(self.adapter.transformer)
     
     def _init_logging_backend(self):
         if not self.accelerator.is_main_process:

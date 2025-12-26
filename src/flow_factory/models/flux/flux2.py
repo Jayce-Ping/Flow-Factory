@@ -361,7 +361,7 @@ class Flux2Adapter(BaseAdapter):
         batch_size = prompt_embeds.shape[0]
 
         # 3. Prepare initial noise
-        num_channels_latents = self.pipeline.transformer.config.in_channels // 4
+        num_channels_latents = self.transformer.config.in_channels // 4
         latents, latent_ids = self.pipeline.prepare_latents(
             batch_size=batch_size,
             num_latents_channels=num_channels_latents,
@@ -392,11 +392,11 @@ class Flux2Adapter(BaseAdapter):
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
                 current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
 
-                latent_model_input = latents.to(self.pipeline.transformer.dtype)
+                latent_model_input = latents.to(self.transformer.dtype)
                 latent_image_ids = latent_ids
 
                 if image_latents is not None:
-                    latent_model_input = torch.cat([latents, image_latents], dim=1).to(self.pipeline.transformer.dtype)
+                    latent_model_input = torch.cat([latents, image_latents], dim=1).to(self.transformer.dtype)
                     latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
 
                 noise_pred = self.transformer(
@@ -577,11 +577,11 @@ class Flux2Adapter(BaseAdapter):
         attention_kwargs = samples[0].extra_kwargs.get('attention_kwargs', None)
 
         # Catenate condition latents if given
-        latent_model_input = latents.to(self.pipeline.transformer.dtype)
+        latent_model_input = latents.to(self.transformer.dtype)
         latent_image_ids = latent_ids
 
         if image_latents is not None:
-            latent_model_input = torch.cat([latents, image_latents], dim=1).to(self.pipeline.transformer.dtype)
+            latent_model_input = torch.cat([latents, image_latents], dim=1).to(self.transformer.dtype)
             latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
                 
         # 2. Set scheduler timesteps

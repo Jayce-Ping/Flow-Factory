@@ -470,43 +470,39 @@ def load_video_frames(video_path: str, fps: Optional[int] = None) -> List[Image.
 def _compute_function_hash(func: Optional[Callable], digits: int = 16) -> str:
     """
     Compute stable hash for function caching.
-    
-    Strategy (fallback chain):
-        1. Use function source code (most accurate)
-        2. Fall back to module path + function name (for compatibility)
-        3. Final fallback to object ID (unstable but always works)
-    
-    Args:
-        func: Function to hash (can be None)
-        digits: Number of hash digits to return
-        
-    Returns:
-        Hexadecimal hash string
+    For bound methods, includes class name to distinguish subclass implementations.
     """
     _MAX_DIGITS = 32
     digits = min(digits, _MAX_DIGITS)
     
     if func is None:
-        return "none" * 4  # Stable identifier for None
+        return "none" * 4
+    
+    # Extract class context for bound methods
+    class_prefix = ""
+    if hasattr(func, '__self__'):
+        class_name = func.__self__.__class__.__qualname__
+        class_prefix = f"{class_name}:"
     
     try:
-        # Method 1: Get function source code (most reliable)
+        # Method 1: Source code + class context
         source = inspect.getsource(func)
-        # Remove whitespace differences to avoid spurious cache misses
         source = "".join(source.split())
-        return hashlib.md5(source.encode()).hexdigest()[:digits]
+        combined = class_prefix + source
+        return hashlib.md5(combined.encode()).hexdigest()[:digits]
     except (TypeError, OSError):
-        # Method 2: Use module path + function name (fallback)
+        # Method 2: Module path + class context
         try:
             module = inspect.getmodule(func)
             module_name = module.__name__ if module else "unknown"
             func_name = getattr(func, '__qualname__', getattr(func, '__name__', 'anonymous'))
-            signature = f"{module_name}.{func_name}"
+            signature = class_prefix + f"{module_name}.{func_name}"
             return hashlib.md5(signature.encode()).hexdigest()[:digits]
         except:
-            # Method 3: Final fallback - use object ID (not stable across runs but prevents crashes)
+            # Method 3: Fallback with class context
             logger.warning(f"Could not compute stable hash for {func}, using id() fallback")
-            return hashlib.md5(str(id(func)).encode()).hexdigest()[:digits]
+            signature = class_prefix + str(id(func))
+            return hashlib.md5(signature.encode()).hexdigest()[:digits]
 
 
 def _compute_encode_funcs_hash(*funcs: Optional[Callable], digits: int = 16) -> str:

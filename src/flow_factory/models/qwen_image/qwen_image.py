@@ -316,7 +316,7 @@ class QwenImageAdapter(BaseAdapter):
         # 3. Prepare latents
         batch_size = prompt_embeds.shape[0]
         
-        num_channels_latents = self.pipeline.transformer.config.in_channels // 4
+        num_channels_latents = self.transformer.config.in_channels // 4
         latents = self.pipeline.prepare_latents(
             batch_size=batch_size,
             num_channels_latents=num_channels_latents,
@@ -347,7 +347,7 @@ class QwenImageAdapter(BaseAdapter):
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
 
             # Conditioned prediction
-            with self.pipeline.transformer.cache_context("cond"):
+            with self.transformer.cache_context("cond"):
                 noise_pred = self.transformer(
                     hidden_states=latents,
                     timestep=timestep / 1000,
@@ -362,7 +362,7 @@ class QwenImageAdapter(BaseAdapter):
 
             # Negative conditioned prediction
             if do_true_cfg:
-                with self.pipeline.transformer.cache_context("uncond"):
+                with self.transformer.cache_context("uncond"):
                     neg_noise_pred = self.transformer(
                         hidden_states=latents,
                         timestep=timestep / 1000,
@@ -518,7 +518,7 @@ class QwenImageAdapter(BaseAdapter):
             )[0]
 
         if do_true_cfg:
-            with self.pipeline.transformer.cache_context("uncond"):
+            with self.transformer.cache_context("uncond"):
                 neg_noise_pred = self.transformer(
                     hidden_states=latents,
                     timestep=timestep / 1000,

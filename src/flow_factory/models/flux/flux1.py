@@ -152,7 +152,7 @@ class Flux1Adapter(BaseAdapter):
         )
         
         # 3. Prepare latents
-        num_channels_latents = self.pipeline.transformer.config.in_channels // 4
+        num_channels_latents = self.transformer.config.in_channels // 4
         latents, latent_image_ids = self.pipeline.prepare_latents(
             batch_size=batch_size,
             num_channels_latents=num_channels_latents,
@@ -182,7 +182,7 @@ class Flux1Adapter(BaseAdapter):
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
             
             # Predict noise
-            noise_pred = self.pipeline.transformer(
+            noise_pred = self.transformer(
                 hidden_states=latents,
                 timestep=timestep / 1000,
                 guidance=guidance.expand(batch_size),
@@ -275,7 +275,7 @@ class Flux1Adapter(BaseAdapter):
     
         
         # 3. Forward pass
-        noise_pred = self.pipeline.transformer(
+        noise_pred = self.transformer(
             hidden_states=latents,
             timestep=timestep / 1000,
             guidance=guidance.expand(batch_size),

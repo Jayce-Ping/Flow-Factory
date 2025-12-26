@@ -82,7 +82,7 @@ class BaseSample(BaseOutput):
         return self
 
 
-class BaseAdapter(nn.Module, ABC):
+class BaseAdapter(ABC):
     """
     Abstract Base Class for Flow-Factory models.
     """
@@ -252,7 +252,6 @@ class BaseAdapter(nn.Module, ABC):
     # ============================== Mode Management ==============================
     def eval(self, transformer_only: bool = True):
         """Set model to evaluation mode."""
-        super().eval()
         
         if not transformer_only:
             # Set all components to eval mode
@@ -275,9 +274,7 @@ class BaseAdapter(nn.Module, ABC):
             self.scheduler.rollout(*args, **kwargs)
 
     def train(self, mode: bool = True, transformer_only: bool = True):
-        """Set model to training mode."""
-        super().train(mode)
-        
+        """Set model to training mode."""        
         # Set all components to training mode
         if not transformer_only:
             for encoder in self.text_encoders:
@@ -354,7 +351,7 @@ class BaseAdapter(nn.Module, ABC):
         
         # Remove duplicates and handle empty lists
         component_map = {
-            comp: list(set(mods)) if mods else None
+            comp: sorted(list(set(mods))) if mods else None
             for comp, mods in component_map.items()
         }
         
@@ -545,7 +542,7 @@ class BaseAdapter(nn.Module, ABC):
     def save_checkpoint(
             self,
             path: str,
-            accelerator : Optional[Accelerator] = None,
+            accelerator : Accelerator,
             max_shard_size: str = "5GB",
             dtype: Union[torch.dtype, str] = torch.bfloat16,
             save_ema: bool = True,
@@ -563,7 +560,7 @@ class BaseAdapter(nn.Module, ABC):
                     'float32': torch.float32
                 }.get(dtype.lower(), torch.bfloat16)
 
-        for comp_name in self.model_args.target_components:
+        for comp_name in self.target_module_map.keys():
             if not hasattr(self, comp_name):
                 logger.warning(f"Component {comp_name} not found, skipping save")
                 continue
@@ -572,28 +569,23 @@ class BaseAdapter(nn.Module, ABC):
             comp_path = os.path.join(path, comp_name) if len(self.model_args.target_components) > 1 else path
             os.makedirs(comp_path, exist_ok=True)
 
-            if accelerator is not None:
-                # remove hooks/wrappers to get the underlying state dict
-                unwrapped_model = accelerator.unwrap_model(component)
-                # get_state_dict handles the gathering from shards
-                state_dict = accelerator.get_state_dict(unwrapped_model)
-            else:
-                state_dict = component.state_dict()
+            # remove hooks/wrappers to get the underlying state dict
+            unwrapped_model = accelerator.unwrap_model(component)
+            state_dict = accelerator.get_state_dict(unwrapped_model)
 
-            # To save dtype
-            if state_dict is not None:
-                state_dict = {k: v.to(dtype) for k, v in state_dict.items()}
-
-            if self.model_args.finetune_type == 'lora' and isinstance(component, PeftModel):
+            if self.model_args.finetune_type == 'lora' and isinstance(unwrapped_model, PeftModel):
                 logger.info(f"Saving LoRA adapter for {comp_name} to {comp_path}")
-                component.save_pretrained(comp_path, state_dict=state_dict)
-            elif hasattr(component, "save_pretrained"):
+                unwrapped_model.save_pretrained(comp_path)
+            elif hasattr(unwrapped_model, "save_pretrained"):
                 logger.info(f"Saving full weights for {comp_name} to {comp_path}")
-                component.to(dtype).save_pretrained(comp_path, state_dict=state_dict, max_shard_size=max_shard_size)
+                unwrapped_model.to(dtype).save_pretrained(comp_path, max_shard_size=max_shard_size)
             else:
                 # Fallback to torch save
+                logger.info(f"Saving full weights (torch) for {comp_name} to {weight_path}")
                 weight_path = os.path.join(comp_path, "pytorch_model.bin")
-                logger.info(f"Saving full weights for {comp_name} to {weight_path}")
+                state_dict = {
+                    k: v.to(dtype) for k, v in accelerator.get_state_dict(unwrapped_model).items()
+                }
                 torch.save(state_dict, weight_path)
 
         logger.info(f"Checkpoint saved successfully to {path}")
