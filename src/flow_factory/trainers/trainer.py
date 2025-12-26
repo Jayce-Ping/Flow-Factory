@@ -45,6 +45,7 @@ class BaseTrainer(ABC):
         )
 
         self._initialization()
+        self.adapter.post_init()
         self._init_logging_backend()
 
         if self.accelerator.is_local_main_process:
@@ -55,10 +56,6 @@ class BaseTrainer(ABC):
         """Log data using the initialized logger."""
         if self.logger is not None:
             self.logger.log_data(data, step=step)
-
-    @property
-    def transformer(self) -> nn.Module:
-        return self.adapter.transformer
 
     @property
     def unwrapped_transformer(self) -> BaseAdapter:
@@ -73,6 +70,11 @@ class BaseTrainer(ABC):
 
     def _init_reward_model(self) -> BaseRewardModel:
         """Initialize reward model from configuration."""
+
+        # If DeepSpeed ZeRO-3 is enabled, the reward model will be somehow sharded.
+        # We need to disable ZeRO-3 init context when loading the model to avoid issues
+        # NOTE: This bug persiste even with this context manager. DONOT USE ZeRO-3.
+        # A possible solution: use DeepSpeed GatherParamter manually in the reward_model's `forward`.
         self.reward_model = load_reward_model(
             config=self.config,
             accelerator=self.accelerator,
@@ -145,7 +147,7 @@ class BaseTrainer(ABC):
         """Save trainer state to a specific path."""
         if self.accelerator.is_main_process:
             os.makedirs(path, exist_ok=True)
-            self.adapter.save_checkpoint(path, transformer_override=self.unwrapped_transformer)
+            self.adapter.save_checkpoint(path, self.accelerator)
 
         self.accelerator.wait_for_everyone()
 

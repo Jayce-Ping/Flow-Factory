@@ -15,7 +15,8 @@ from diffusers.utils.outputs import BaseOutput
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.models.modeling_utils import ModelMixin
 from peft import get_peft_model, LoraConfig, PeftModel
-
+from accelerate import Accelerator
+from accelerate.utils import GatheredParameters
 
 from ..ema import EMAModuleWrapper
 from ..scheduler import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput
@@ -115,14 +116,16 @@ class BaseAdapter(nn.Module, ABC):
             )
 
         # Set precision
-        self._mix_precision()
-        self._set_trainable_params_dtype()
-
-        self._init_ema()
+        self._cast_frozen_components()
 
         # Enable gradient checkpointing if needed
         if self.training_args.enable_gradient_checkpointing:
             self.enable_gradient_checkpointing()
+
+    # ================================== Post Init =================================
+    def post_init(self):
+        """Hook for additional initialization after main trainer's `accelerator.prepare`."""
+        self._init_ema()
 
     # ============================== Loading Components ==============================
     @abstractmethod
@@ -397,8 +400,10 @@ class BaseAdapter(nn.Module, ABC):
     @contextmanager
     def use_ema_parameters(self):
         if hasattr(self, 'ema_wrapper') and self.ema_wrapper is not None:
-            with self.ema_wrapper.use_ema_parameters(self.get_trainable_parameters()):
-                yield
+            trainable_params = self.get_trainable_parameters()
+            with GatheredParameters(trainable_params, modifier_rank=None):
+                with self.ema_wrapper.use_ema_parameters(trainable_params):
+                    yield
         else:
             yield
     
@@ -415,7 +420,7 @@ class BaseAdapter(nn.Module, ABC):
                     logger.warning(f"{comp_name} does not support gradient checkpointing")
 
     # ============================== Precision Management ==============================
-    def _mix_precision(self):
+    def _cast_frozen_components(self):
         """Apply mixed precision to all components."""
         inference_dtype = self._inference_dtype
         
@@ -424,30 +429,9 @@ class BaseAdapter(nn.Module, ABC):
             encoder.to(dtype=inference_dtype)
         self.vae.to(dtype=inference_dtype)
         
-        # Transformer: inference dtype first (will be updated later for trainable params)
-        for transformer in self.transformers:
-            transformer.to(dtype=inference_dtype)
-
-    def _set_trainable_params_dtype(self):
-        """Set trainable parameters to master weight dtype."""
-        master_dtype = self.model_args.master_weight_dtype
-        inference_dtype = self._inference_dtype
-        
-        if master_dtype == inference_dtype:
-            return
-        
-        trainable_count = 0
-
-        for comp_name in self.model_args.target_components:
-            if hasattr(self, comp_name):
-                component = getattr(self, comp_name)
-                for name, param in component.named_parameters():
-                    if param.requires_grad:
-                        param.data = param.data.to(dtype=master_dtype)
-                        trainable_count += 1
-        
-        if trainable_count > 0:
-            logger.info(f"Set {trainable_count} trainable parameters to {master_dtype}")
+        # Transformer will be handled separately by `accelerator.prepare`
+        # for transformer in self.transformers:
+        #     transformer.to(dtype=inference_dtype)
 
     # ============================== LoRA Management ==============================
     def apply_lora(
@@ -544,6 +528,7 @@ class BaseAdapter(nn.Module, ABC):
     def save_checkpoint(
             self,
             path: str,
+            accelerator : Optional[Accelerator] = None,
             max_shard_size: str = "5GB",
             dtype: Union[torch.dtype, str] = torch.bfloat16,
             save_ema: bool = True,
@@ -570,12 +555,29 @@ class BaseAdapter(nn.Module, ABC):
             comp_path = os.path.join(path, comp_name) if len(self.model_args.target_components) > 1 else path
             os.makedirs(comp_path, exist_ok=True)
 
+            if accelerator is not None:
+                # remove hooks/wrappers to get the underlying state dict
+                unwrapped_model = accelerator.unwrap_model(component)
+                # get_state_dict handles the gathering from shards
+                state_dict = accelerator.get_state_dict(unwrapped_model)
+            else:
+                state_dict = component.state_dict()
+
+            # To save dtype
+            if state_dict is not None:
+                state_dict = {k: v.to(dtype) for k, v in state_dict.items()}
+
             if self.model_args.finetune_type == 'lora' and isinstance(component, PeftModel):
                 logger.info(f"Saving LoRA adapter for {comp_name} to {comp_path}")
-                component.save_pretrained(comp_path)
-            else:
+                component.save_pretrained(comp_path, state_dict=state_dict)
+            elif hasattr(component, "save_pretrained"):
                 logger.info(f"Saving full weights for {comp_name} to {comp_path}")
-                component.to(dtype).save_pretrained(comp_path, max_shard_size=max_shard_size)
+                component.to(dtype).save_pretrained(comp_path, state_dict=state_dict, max_shard_size=max_shard_size)
+            else:
+                # Fallback to torch save
+                weight_path = os.path.join(comp_path, "pytorch_model.bin")
+                logger.info(f"Saving full weights for {comp_name} to {weight_path}")
+                torch.save(state_dict, weight_path)
 
         logger.info(f"Checkpoint saved successfully to {path}")
 

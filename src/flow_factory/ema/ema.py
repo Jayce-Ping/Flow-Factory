@@ -114,6 +114,9 @@ class EMAModuleWrapper:
             self.temp_stored_parameters = [p.detach().cpu().clone() for p in parameters]
         
         for ema_param, param in zip(self.ema_parameters, parameters, strict=True):
+            if param.numel() == 0:
+                continue
+
             param.data.copy_(ema_param.to(param.device).data)
 
     def copy_temp_to(self, parameters: Iterable[torch.nn.Parameter]) -> None:

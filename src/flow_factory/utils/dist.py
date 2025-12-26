@@ -1,9 +1,35 @@
 # src/flow_factory/utils/dist.py
 from typing import List, Optional, Union
+from contextlib import nullcontext
+
 import torch
 from torch import nn
 import torch.distributed as dist
 from accelerate import Accelerator
+from accelerate.state import AcceleratorState
+
+
+def disable_zero3_init():
+    """
+    Returns a context manager that disables DeepSpeed ZeRO-3 Init if it is currently active.
+    Returns a nullcontext otherwise.
+    
+    Useful for loading frozen models (VAEs, Text Encoders) that should not be sharded 
+    or when you need the full state dict in memory during initialization.
+    """
+    # 1. Access the AcceleratorState singleton safely
+    state = AcceleratorState()
+    
+    # 2. Check if DeepSpeed is enabled
+    if state.distributed_type != "DEEPSPEED" or state.deepspeed_plugin is None:
+        return nullcontext()
+
+    # 3. specific check: Only disable if Stage 3 is active
+    # (Stage 1 & 2 do not shard parameters during init, so no need to disable)
+    if state.deepspeed_plugin.zero_stage == 3:
+        return state.deepspeed_plugin.zero3_init_context_manager(enable=False)
+
+    return nullcontext()
 
 def is_model_sharded_by_deepspeed(model) -> bool:
     for param in model.parameters():
