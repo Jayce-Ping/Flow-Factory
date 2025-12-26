@@ -39,7 +39,7 @@ train:
   save_dir: "~/jcy/Flow-Factory"  # Directory for logs and checkpoints
 
   # Image settings
-  resolution: 256  # Can be int or [height, width]
+  resolution: 512  # Can be int or [height, width]
   
   # Batch and sampling
   per_device_batch_size: 2  # Batch size per device
