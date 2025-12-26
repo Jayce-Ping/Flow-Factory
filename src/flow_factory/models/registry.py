@@ -7,8 +7,9 @@ from typing import Type, Dict
 import importlib
 import logging
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+from ..utils.logger_utils import setup_logger
+
+logger = setup_logger(__name__)
 
 # Model Adapter Registry Storage
 _MODEL_ADAPTER_REGISTRY: Dict[str, str] = {

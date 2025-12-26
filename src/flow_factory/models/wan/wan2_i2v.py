@@ -14,10 +14,9 @@ from ..adapter import BaseAdapter, BaseSample
 from ...hparams import *
 from ...scheduler import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput, set_scheduler_timesteps
 from ...utils.base import filter_kwargs
+from ...utils.logger_utils import setup_logger
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
-
+logger = setup_logger(__name__)
 
 
 @dataclass

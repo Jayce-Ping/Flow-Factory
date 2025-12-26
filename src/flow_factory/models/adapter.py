@@ -21,10 +21,9 @@ from ..ema import EMAModuleWrapper
 from ..scheduler import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput
 from ..hparams import *
 from ..utils.base import filter_kwargs, is_tensor_list
+from ..utils.logger_utils import setup_logger
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
-
+logger = setup_logger(__name__)
 @dataclass
 class BaseSample(BaseOutput):
     """
@@ -111,8 +110,8 @@ class BaseAdapter(nn.Module, ABC):
             self.load_checkpoint(self.model_args.resume_path)
         elif self.model_args.finetune_type == 'lora':
             self.apply_lora(
+                target_modules=self.model_args.target_modules,
                 components=self.model_args.target_components,
-                target_modules=self.model_args.target_modules
             )
 
         # Set precision
@@ -297,9 +296,9 @@ class BaseAdapter(nn.Module, ABC):
     
     def _parse_target_modules(
         self,
-        target_modules: Union[str, List[str], None],
-        components: List[str]
-    ) -> Dict[str, Union[str, List[str], None]]:
+        target_modules: Union[str, List[str]],
+        components: Union[str, List[str]]
+    ) -> Dict[str, Union[List[str], None]]:
         """
         Parse target_modules config into component-specific mapping.
         
@@ -309,8 +308,8 @@ class BaseAdapter(nn.Module, ABC):
                 - 'all': Unfreeze all parameters
                 - str: Single module pattern
                 - List[str]: Module patterns with optional component prefix
-                - None: Use self.default_target_modules
-            components: List of component names to map modules to
+            components: Union[str, List[str]]
+                - Component(s) to apply target_modules to.
         
         Returns:
             Dict mapping component names to their target modules.
@@ -320,8 +319,12 @@ class BaseAdapter(nn.Module, ABC):
                 'transformer_3': None
             }
         """
+        # Normalize components to list
+        if isinstance(components, str):
+            components = [components]
+
         # Normalize target_modules
-        if target_modules == 'default' or target_modules is None:
+        if target_modules == 'default':
             base_modules = self.default_target_modules
         elif target_modules == 'all':
             # Return 'all' for each component
@@ -348,15 +351,14 @@ class BaseAdapter(nn.Module, ABC):
                     component_map[comp].append(module)
         
         # Remove duplicates and handle empty lists
-        for comp in components:
-            if component_map[comp]:
-                component_map[comp] = list(set(component_map[comp]))
-            else:
-                component_map[comp] = None
+        component_map = {
+            comp: list(set(mods)) if mods else None
+            for comp, mods in component_map.items()
+        }
         
         return component_map
     
-    def _init_target_module_map(self) -> Dict[str, Union[str, List[str], None]]:
+    def _init_target_module_map(self) -> Dict[str, Union[List[str], None]]:
         """
         Initialize and cache target module mapping from config.
         
@@ -367,10 +369,12 @@ class BaseAdapter(nn.Module, ABC):
             target_modules=self.model_args.target_modules,
             components=self.model_args.target_components
         )
-        
-        logger.info("Target module map:")
+
+        log_string = "Target module map:"
         for comp, modules in component_map.items():
-            logger.info(f"  {comp}: {modules}")
+            log_string += f"\n  {comp}: {modules}"
+        
+        logger.info(log_string)
         
         return component_map
 
@@ -454,33 +458,26 @@ class BaseAdapter(nn.Module, ABC):
     # ============================== LoRA Management ==============================
     def apply_lora(
         self,
+        target_modules: Union[str, List[str]],
         components: Union[str, List[str]] = 'transformer',
-        target_modules: Optional[Union[str, List[str]]] = None
     ) -> Union[PeftModel, Dict[str, PeftModel]]:
         """
         Apply LoRA adapters to specified components with prefix-based module targeting.
         
         Args:
-            components: Component(s) to apply LoRA
             target_modules: Module patterns with optional component prefix
                 - 'to_q': Apply to all components in `components`
                 - 'transformer.to_q': Apply only to transformer
                 - 'transformer_2.to_v': Apply only to transformer_2
                 - ['to_q', 'transformer.to_k']: Mixed specification
+            components: Component(s) to apply LoRA
         """
         # Normalize components to list
         if isinstance(components, str):
             components = [components]
         
-        if target_modules is None:
-            # Use cached map, filtering for requested components
-            component_modules = {
-                comp: self.target_module_map.get(comp, self.default_target_modules)
-                for comp in components
-            }
-        else:
-            # Re-parse with explicit target_modules
-            component_modules = self._parse_target_modules(target_modules, components)
+        # Parse with explicit target_modules
+        component_modules = self._parse_target_modules(target_modules, components)
         
         # Apply LoRA to each component
         results = {}

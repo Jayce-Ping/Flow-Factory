@@ -6,9 +6,10 @@ Centralized registry for training algorithms with dynamic loading.
 from typing import Type, Dict
 import importlib
 import logging
+from ..utils.logger_utils import setup_logger
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
+
 
 # Trainer Registry Storage
 _TRAINER_REGISTRY: Dict[str, str] = {

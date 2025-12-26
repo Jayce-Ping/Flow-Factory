@@ -12,9 +12,9 @@ from typing import Optional, Dict, Any, Callable, List, Protocol, Union
 import logging
 from ..utils.base import filter_kwargs
 from datasets.utils.logging import disable_progress_bar
+from ..utils.logger_utils import setup_logger
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__, rank_zero_only=True)
 
 
 # ========================================================================================

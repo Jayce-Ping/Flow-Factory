@@ -18,10 +18,10 @@ tqdm = partial(tqdm_.tqdm, dynamic_ncols=True)
 from .trainer import BaseTrainer
 from ..models.adapter import BaseSample
 from ..utils.base import filter_kwargs, create_generator
+from ..utils.logger_utils import setup_logger
 
+logger = setup_logger(__name__)
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger("flow_factory.train")
 
 
 class GRPOTrainer(BaseTrainer):

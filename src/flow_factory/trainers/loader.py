@@ -12,10 +12,10 @@ from ..models.loader import load_model
 from .trainer import BaseTrainer
 from .registry import get_trainer_class, list_registered_trainers
 from ..hparams import Arguments
+from ..utils.logger_utils import setup_logger
 
+logger = setup_logger(__name__)
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
 
 
 def load_trainer(config: Arguments) -> BaseTrainer:

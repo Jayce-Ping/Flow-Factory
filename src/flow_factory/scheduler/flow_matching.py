@@ -11,10 +11,9 @@ from diffusers.pipelines.stable_diffusion_3.pipeline_stable_diffusion_3 import r
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from ..utils.base import to_broadcast_tensor
+from ..utils.logger_utils import setup_logger
 
-
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 def calculate_shift(
     image_seq_len : int,

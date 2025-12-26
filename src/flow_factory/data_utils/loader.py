@@ -10,10 +10,11 @@ from .sampler import DistributedKRepeatSampler
 from ..hparams import Arguments
 from ..data_utils.dataset import PreprocessCallable
 from ..utils.base import filter_kwargs
-import logging
+from ..utils.logger_utils import setup_logger
+
+logger = setup_logger(__name__, rank_zero_only=True)
 
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-logger = logging.getLogger(__name__)
 
 
 def _create_or_load_dataset(

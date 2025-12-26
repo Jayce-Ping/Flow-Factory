@@ -4,9 +4,9 @@ import torch
 from torch.utils.data import Sampler, Dataset, DataLoader
 import logging
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+from ..utils.logger_utils import setup_logger
 
+logger = setup_logger(__name__, rank_zero_only=True)
 class DistributedKRepeatSampler(Sampler):
     """
     """

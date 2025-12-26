@@ -8,10 +8,11 @@ from typing import Any, List, Literal, Union, Optional, Tuple, Dict
 import logging
 import torch.distributed as dist
 from datetime import datetime
-from .abc import ArgABC
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+from .abc import ArgABC
+from ..utils.logger_utils import setup_logger
+
+logger = setup_logger(__name__, rank_zero_only=True)
 
 
 def get_world_size() -> int:
