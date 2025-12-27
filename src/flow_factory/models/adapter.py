@@ -725,14 +725,7 @@ class BaseAdapter(ABC):
         # Setup EMA context
         save_context = self.use_ema_parameters if save_ema else nullcontext
         
-        with save_context():
-            # Create output directory on main process
-            if self.accelerator.is_main_process:
-                os.makedirs(path, exist_ok=True)
-            
-            # Sync before saving
-            self.accelerator.wait_for_everyone()
-            
+        with save_context():            
             for comp_name in self.target_module_map.keys():
                 if not hasattr(self, comp_name):
                     logger.warning(f"Component {comp_name} not found, skipping save")
@@ -802,7 +795,9 @@ class BaseAdapter(ABC):
                 
                 component = getattr(self, comp_name)
                 comp_path = os.path.join(path, comp_name) if len(self.model_args.target_components) > 1 else path
-                component.from_pretrained(comp_path)
+                component_class = type(component)
+                component = component_class.from_pretrained(comp_path)
+                setattr(self, comp_name, component)
                 logger.info(f"Weights loaded for {comp_name}")
 
         # Move model back to target device
