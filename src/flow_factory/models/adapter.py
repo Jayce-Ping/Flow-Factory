@@ -9,6 +9,7 @@ import logging
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from PIL import Image
 from safetensors.torch import save_file, load_file
 from diffusers.utils.outputs import BaseOutput
@@ -532,6 +533,22 @@ class BaseAdapter(ABC):
     # ============================== Checkpoint Management ==============================
 
     # -------------------------------- Helpers --------------------------------
+
+    @property
+    def _distributed_type(self) -> DistributedType:
+        """Get current distributed type."""
+        return self.accelerator.distributed_type
+
+    def _is_deepspeed(self) -> bool:
+        """Check if DeepSpeed is enabled."""
+        return self._distributed_type == DistributedType.DEEPSPEED
+
+
+    def _is_fsdp(self) -> bool:
+        """Check if FSDP is enabled."""
+        return self._distributed_type == DistributedType.FSDP
+
+
     def _is_zero3(self) -> bool:
         """Check if DeepSpeed ZeRO Stage 3 is enabled."""
         if self.accelerator.distributed_type != DistributedType.DEEPSPEED:
@@ -553,7 +570,28 @@ class BaseAdapter(ABC):
             ShardingStrategy.FULL_SHARD,
             ShardingStrategy.SHARD_GRAD_OP,
         )
+    
+    @contextmanager
+    def _fsdp_full_shard_save_context(self, model: torch.nn.Module):
+        """Context manager for FSDP full state dict gathering."""
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        from torch.distributed.fsdp import StateDictType, FullStateDictConfig
         
+        with FSDP.state_dict_type(
+            model,
+            StateDictType.FULL_STATE_DICT,
+            FullStateDictConfig(rank0_only=True, offload_to_cpu=True),
+        ):
+            yield
+
+    @contextmanager
+    def _deepspeed_zero3_save_context(self, model: torch.nn.Module):
+        """Context manager for DeepSpeed ZeRO-3 state dict gathering."""
+        # Not Tested. Use with caution.
+        from deepspeed.runtime.zero import GatheredParameters
+        with GatheredParameters(list(model.parameters()), modifier_rank=0):
+            yield
+
     def _get_state_dict(
         self,
         model: torch.nn.Module,
@@ -567,9 +605,12 @@ class BaseAdapter(ABC):
             - DeepSpeed ZeRO Stage 3 (gathers sharded params)
             - FSDP Full Shard (gathers sharded params)
         """
-        if self._is_zero3() or self._is_fsdp_full_shard():
-            # Use accelerator's get_state_dict which handles gathering
-            state_dict = self.accelerator.get_state_dict(model)
+        if self._is_fsdp_full_shard():
+            with self._fsdp_full_shard_save_context(model):
+                state_dict = model.state_dict() if self.accelerator.is_main_process else None
+        elif self._is_zero3():
+            with self._deepspeed_zero3_save_context(model):
+                state_dict = model.state_dict()
         else:
             # Standard case: unwrap and get state dict directly
             unwrapped = self.accelerator.unwrap_model(model)
@@ -581,6 +622,14 @@ class BaseAdapter(ABC):
         
         return state_dict
 
+    @staticmethod
+    def _filter_lora_state_dict(state_dict: dict) -> dict:
+        """Filter state dict to only include LoRA parameters."""
+        return {
+            k: v for k, v in state_dict.items()
+            if 'lora_' in k or 'modules_to_save' in k
+        }
+    
     # -------------------------------------------- Save ------------------------------------
     def _save_lora(
         self,
@@ -592,22 +641,24 @@ class BaseAdapter(ABC):
         unwrapped = self.accelerator.unwrap_model(model)
         
         if not isinstance(unwrapped, PeftModel):
-            logger.warning(f"Model is not a PeftModel, skipping LoRA save")
+            logger.warning(f"Model is not a PeftModel, falling back to full save.")
+            self._save_full_model(
+                model,
+                save_path,
+                dtype=dtype,
+            )
             return
         
         if self._is_zero3() or self._is_fsdp_full_shard():
-            # Gather LoRA weights and save on main process only
+            # Gather all params before saving
             state_dict = self._get_state_dict(model, dtype=dtype)
-            if self.accelerator.is_main_process and state_dict is not None:
-                # Filter to only LoRA parameters
-                lora_state_dict = {
-                    k: v for k, v in state_dict.items() 
-                    if 'lora_' in k or 'bias' in k
-                }
+            self.accelerator.wait_for_everyone()
+            # Filter LoRA params
+            lora_state_dict = self._filter_lora_state_dict(state_dict)
+            if self.accelerator.is_main_process:
                 unwrapped.save_pretrained(
                     save_path,
                     state_dict=lora_state_dict,
-                    safe_serialization=True,
                 )
         else:
             # Standard save
@@ -642,8 +693,8 @@ class BaseAdapter(ABC):
             )
         else:
             # Fallback to torch save
-            weight_path = os.path.join(save_path, "pytorch_model.bin")
-            torch.save(state_dict, weight_path)
+            weight_path = os.path.join(save_path, "model.safetensors")
+            save_file(state_dict, weight_path)
 
 
     def save_checkpoint(
@@ -756,6 +807,7 @@ class BaseAdapter(ABC):
 
         # Move model back to target device
         self.on_load()
+
     # ============================== Freezing Components ==============================
     def _freeze_text_encoders(self):
         """Freeze all text encoders."""

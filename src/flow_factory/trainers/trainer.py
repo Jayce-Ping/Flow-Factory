@@ -106,7 +106,7 @@ class BaseTrainer(ABC):
 
     def _initialization(self):
         # Init dataloader and optimizer
-        self.adapter.on_load(self.accelerator.device)
+        # self.adapter.on_load(self.accelerator.device)
         self.dataloader, self.test_dataloader = self._init_dataloader()
         self.optimizer = self._init_optimizer()
         # Prepare everything with accelerator
