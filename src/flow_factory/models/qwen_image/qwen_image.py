@@ -447,10 +447,7 @@ class QwenImageAdapter(BaseAdapter):
         device = self.device
         dtype = self.pipeline.transformer.dtype
         # Assume all samples have the same guidance scale
-        true_cfg_scale = [
-            s.extra_kwargs.get('guidance_scale', self.training_args.guidance_scale)
-            for s in samples
-        ]
+        true_cfg_scale = samples[0].extra_kwargs.get('guidance_scale', self.training_args.guidance_scale)
         # Assume all samples have the same attention kwargs
         attention_kwargs = samples[0].extra_kwargs.get('attention_kwargs', {})
 
@@ -466,7 +463,7 @@ class QwenImageAdapter(BaseAdapter):
             s.negative_prompt_embeds is not None and s.negative_prompt_embeds_mask is not None
             for s in samples
         )
-        do_true_cfg = any(gs > 1.0 for gs in true_cfg_scale) and has_neg_prompt
+        do_true_cfg = true_cfg_scale > 1.0 and has_neg_prompt
 
         if do_true_cfg:
             negative_prompt_embeds = [s.negative_prompt_embeds for s in samples]
