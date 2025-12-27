@@ -63,7 +63,7 @@ def _create_or_load_dataset(
     )
     
     # Fast path: merged cache already exists
-    if os.path.exists(merged_cache_path):
+    if os.path.exists(merged_cache_path) and not base_kwargs.get('force_reprocess', False):
         if accelerator.is_main_process:
             logger.info(f"Loading {split} dataset from merged cache: {merged_cache_path}")
         return GeneralDataset.load_merged(merged_cache_path)
