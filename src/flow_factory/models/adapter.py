@@ -53,6 +53,16 @@ class BaseSample(BaseOutput):
         result.update(extra)
         return result
 
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "BaseSample":
+        """Create instance from dict, putting unknown fields into extra_kwargs."""
+        field_names = {f.name for f in fields(cls)}
+        known = {k: v for k, v in d.items() if k in field_names and k != 'extra_kwargs'}
+        extra = {k: v for k, v in d.items() if k not in field_names}
+        assert not (set(extra) & field_names), f"Key collision: {set(extra) & field_names} when creating BaseSample from dict."
+        extra.update(d.get('extra_kwargs', {}))
+        return cls(**known, extra_kwargs=extra)
+
     def short_rep(self) -> Dict[str, Any]:
         """Short representation for logging."""
         def long_tensor_to_shape(t : torch.Tensor):

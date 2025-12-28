@@ -37,6 +37,7 @@ class Flux2Adapter(BaseAdapter):
     def __init__(self, config: Arguments, accelerator : Accelerator):
         super().__init__(config, accelerator)
         self._has_warned_inference_fallback = False
+        self._has_warned_forward_fallback = False
         self._has_warned_preprocess_fallback = False
     
     def load_pipeline(self) -> Flux2Pipeline:
@@ -560,7 +561,7 @@ class Flux2Adapter(BaseAdapter):
 
     # ======================== Forward (Training) ========================
 
-    def _forward(
+    def _i2i_forward(
         self,
         sample : Flux2Sample,
         timestep_index : int,
@@ -568,18 +569,73 @@ class Flux2Adapter(BaseAdapter):
         **kwargs,
     ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
         """Forward method wrapper for single sample."""
-        pass
+        batch_size = 1
+        device = self.device
 
-    def forward(
+        # 1. Extract data from sample
+        guidance_scale = sample.extra_kwargs.get('guidance_scale', self.training_args.guidance_scale)
+        guidance = torch.as_tensor([guidance_scale], device=device, dtype=torch.float32)
+
+        latents = sample.all_latents[timestep_index].unsqueeze(0).to(device)
+        next_latents = sample.all_latents[timestep_index + 1].unsqueeze(0).to(device)
+        timestep = sample.timesteps[timestep_index].unsqueeze(0).to(device)
+        num_inference_steps = len(sample.timesteps)
+        t = timestep[0]
+        prompt_embeds = sample.prompt_embeds.unsqueeze(0).to(device)
+        latent_ids = sample.latent_ids.unsqueeze(0).to(device)
+        text_ids = sample.text_ids.unsqueeze(0).to(device)
+        image_latents = sample.image_latents.unsqueeze(0).to(device) if sample.image_latents is not None else None
+        image_latent_ids = sample.image_latent_ids.unsqueeze(0).to(device) if sample.image_latent_ids is not None else None
+        attention_kwargs = sample.extra_kwargs.get('attention_kwargs', None)
+
+        latent_model_input = latents.to(torch.float32)
+        latent_image_ids = latent_ids
+
+        if image_latents is not None:
+            latent_model_input = torch.cat([latents, image_latents], dim=1).to(torch.float32)
+            latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
+
+        # 2. Set scheduler timesteps
+        mu = compute_empirical_mu(image_seq_len=latents.shape[1], num_steps=num_inference_steps)
+        timesteps = set_scheduler_timesteps(
+            scheduler=self.pipeline.scheduler,
+            num_inference_steps=num_inference_steps,
+            device=device,
+            mu=mu,
+        )
+        # 3. Predict noise
+        noise_pred = self.transformer(
+            hidden_states=latent_model_input,  # (B, image_seq_len, C)
+            timestep=timestep / 1000,
+            guidance=guidance,
+            encoder_hidden_states=prompt_embeds,
+            txt_ids=text_ids,  # B, text_seq_len, 4
+            img_ids=latent_image_ids,  # B, image_seq_len, 4
+            joint_attention_kwargs=attention_kwargs,
+            return_dict=False,
+        )[0]
+        noise_pred = noise_pred[:, : latents.size(1) :]
+
+        # 4. Compute log prob with given next_latents
+        step_kwargs = filter_kwargs(self.scheduler.step, **kwargs)
+        output = self.scheduler.step(
+            model_output=noise_pred,
+            timestep=timestep,
+            sample=latents,
+            prev_sample=next_latents,
+            compute_log_prob=compute_log_prob,
+            return_dict=True,
+            **step_kwargs,
+        )
+        return output
+
+    def _t2i_forward(
         self,
         samples: List[Flux2Sample],
         timestep_index : int,
         compute_log_prob: bool = True,
-        **kwargs,
+        **kwargs,        
     ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
-        """Compute log-probabilities for training."""
-        # TODO: The Batch forward may not be supported. Fallback to loop over samples later.
-        
         batch_size = len(samples)
         device = self.device
         guidance_scale = [
@@ -597,23 +653,13 @@ class Flux2Adapter(BaseAdapter):
         prompt_embeds = torch.stack([s.prompt_embeds for s in samples], dim=0).to(device)
         latent_ids = torch.stack([s.latent_ids for s in samples], dim=0).to(device)
         text_ids = torch.stack([s.text_ids for s in samples], dim=0).to(device)
-        image_latents = torch.stack(
-            [s.image_latents for s in samples],
-            dim=0
-        ) if samples[0].image_latents is not None else None
-        image_latent_ids = torch.stack(
-            [s.image_latent_ids for s in samples],
-            dim=0
-        ) if samples[0].image_latent_ids is not None else None
+        image_latents =  None # Hard code for T2I
+        image_latent_ids =  None
         attention_kwargs = samples[0].extra_kwargs.get('attention_kwargs', None)
 
         # Catenate condition latents if given
         latent_model_input = latents.to(torch.float32)
         latent_image_ids = latent_ids
-
-        if image_latents is not None:
-            latent_model_input = torch.cat([latents, image_latents], dim=1).to(torch.float32)
-            latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
                 
         # 2. Set scheduler timesteps
         mu = compute_empirical_mu(image_seq_len=latents.shape[1], num_steps=num_inference_steps)
@@ -650,4 +696,53 @@ class Flux2Adapter(BaseAdapter):
             **step_kwargs,
         )
         
+        return output
+
+    def forward(
+        self,
+        samples: List[Flux2Sample],
+        timestep_index : int,
+        compute_log_prob: bool = True,
+        **kwargs,
+    ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
+        """Compute log-probabilities for training."""
+        # Determine T2I / I2I
+        is_i2i = any(
+            s.image_latents is not None
+            for s in samples
+        )
+
+        if is_i2i:
+            if not self._has_warned_forward_fallback:
+                logger.warning(
+                    "Flux.2: Batched I2I training unsupported. Falling back to single-sample forward (warning shown once)."
+                )
+                self._has_warned_forward_fallback = True
+            # Fallback to single-sample forward
+            outputs = []
+            for s in samples:
+                out = self._i2i_forward(
+                    sample=s,
+                    timestep_index=timestep_index,
+                    compute_log_prob=compute_log_prob,
+                    **kwargs,
+                )
+                outputs.append(out)
+
+            outputs = [o.to_dict() for o in outputs]
+            # Concatenate outputs
+            output = FlowMatchEulerDiscreteSDESchedulerOutput.from_dict({
+                k: torch.cat([o[k] for o in outputs], dim=0)
+                for k in outputs[0].keys()
+            })
+
+        else:
+            # T2I, can be batched
+            output = self._t2i_forward(
+                samples=samples,
+                timestep_index=timestep_index,
+                compute_log_prob=compute_log_prob,
+                **kwargs,
+            )
+
         return output

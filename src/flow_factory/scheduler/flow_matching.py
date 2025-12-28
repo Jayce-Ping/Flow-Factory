@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional, Union, Callable, Tuple, Literal
 from argparse import Namespace
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields, asdict
 import math
 
 import torch
@@ -68,6 +68,15 @@ class FlowMatchEulerDiscreteSDESchedulerOutput(BaseOutput):
     std_dev_t: torch.FloatTensor
     dt: Optional[torch.FloatTensor] = None
     log_prob: Optional[torch.FloatTensor] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "FlowMatchEulerDiscreteSDESchedulerOutput":
+        field_names = {f.name for f in fields(cls)}
+        filtered_data = {k: v for k, v in data.items() if k in field_names}
+        return cls(**filtered_data)
 
 class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
     """
@@ -192,7 +201,7 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
         return_dict: bool = True,
         dynamics_type : Optional[Literal['Flow-SDE', 'Dance-SDE', 'CPS', 'ODE']] = None,
         sigma_max: Optional[float] = None,
-    ):
+    ) -> Union[FlowMatchEulerDiscreteSDESchedulerOutput, Tuple]:
         if (
             isinstance(timestep, int)
             or isinstance(timestep, torch.IntTensor)
