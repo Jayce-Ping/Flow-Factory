@@ -249,10 +249,12 @@ class GRPOTrainer(BaseTrainer):
 
                         with self.autocast():
                             # Forward pass
+                            return_kwargs = ['log_prob', 'next_latents_mean', 'std_dev_t', 'dt']
                             output = self.adapter.forward(
                                 batch,
                                 timestep_index=timestep_index,
                                 compute_log_prob=True,
+                                return_kwargs=return_kwargs,
                             )
 
                         # Clip advantages
@@ -393,10 +395,12 @@ class GRPOGuardTrainer(GRPOTrainer):
 
                         with self.autocast():
                             # Forward pass
+                            return_kwargs = ['log_prob', 'next_latents_mean', 'std_dev_t', 'dt']
                             output = self.adapter.forward(
                                 batch,
                                 timestep_index=timestep_index,
                                 compute_log_prob=True,
+                                return_kwargs=return_kwargs,
                             )
 
                         # Clip advantages
@@ -405,8 +409,8 @@ class GRPOGuardTrainer(GRPOTrainer):
 
                         # Reweighted ratio
                         scale_factor = torch.sqrt(-output.dt) * output.std_dev_t
-                        old_prev_sample_mean = torch.stack([sample.prev_sample_mean[timestep_index] for sample in batch], dim=0)
-                        mse = (output.prev_sample_mean - old_prev_sample_mean).flatten(1).pow(2).mean(dim=1)
+                        old_next_latents_mean = torch.stack([sample.next_latents_mean[timestep_index] for sample in batch], dim=0)
+                        mse = (output.next_latents_mean - old_next_latents_mean).flatten(1).pow(2).mean(dim=1)
                         ratio = torch.exp((output.log_prob - old_log_prob) * scale_factor + mse / (2 * scale_factor))
 
                         # PPO-style clipped loss

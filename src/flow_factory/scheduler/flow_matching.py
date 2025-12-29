@@ -63,11 +63,12 @@ class FlowMatchEulerDiscreteSDESchedulerOutput(BaseOutput):
     Output class for a single SDE step in Flow Matching.
     """
 
-    prev_sample: torch.FloatTensor
-    prev_sample_mean: torch.FloatTensor
+    next_latents: torch.FloatTensor
+    next_latents_mean: torch.FloatTensor
     std_dev_t: torch.FloatTensor
     dt: Optional[torch.FloatTensor] = None
     log_prob: Optional[torch.FloatTensor] = None
+    noise_pred: Optional[torch.FloatTensor] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -191,14 +192,15 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
 
     def step(
         self,
-        model_output: torch.FloatTensor,
+        noise_pred: torch.FloatTensor,
         timestep: Union[int, float, torch.Tensor],
-        sample: torch.FloatTensor,
-        prev_sample: Optional[torch.FloatTensor] = None,
+        latents: torch.FloatTensor,
+        next_latents: Optional[torch.FloatTensor] = None,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         noise_level : Optional[Union[int, float, torch.Tensor]] = None,
         compute_log_prob: bool = True,
         return_dict: bool = True,
+        return_kwargs : List[str] = ['next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
         dynamics_type : Optional[Literal['Flow-SDE', 'Dance-SDE', 'CPS', 'ODE']] = None,
         sigma_max: Optional[float] = None,
     ) -> Union[FlowMatchEulerDiscreteSDESchedulerOutput, Tuple]:
@@ -228,79 +230,79 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
             sigma_prev = self.sigmas[[i + 1 for i in step_index]] # (B, ) or (1, )
 
         # 1. Numerical Preparation
-        model_output = model_output.float()
-        sample = sample.float()
-        if prev_sample is not None:
-            prev_sample = prev_sample.float()
+        noise_pred = noise_pred.float()
+        latents = latents.float()
+        if next_latents is not None:
+            next_latents = next_latents.float()
 
         # 2. Prepare variables
         noise_level = noise_level or (
             0.0 if self.is_eval else self.get_noise_level_for_timestep(timestep)
         )
-        noise_level = to_broadcast_tensor(noise_level, sample) # To (B, 1, 1)
-        sigma = to_broadcast_tensor(sigma, sample)
-        sigma_prev = to_broadcast_tensor(sigma_prev, sample)
+        noise_level = to_broadcast_tensor(noise_level, latents) # To (B, 1, 1)
+        sigma = to_broadcast_tensor(sigma, latents)
+        sigma_prev = to_broadcast_tensor(sigma_prev, latents)
         dt = sigma_prev - sigma # dt is negative, (batch_size, 1, 1)
 
         dynamics_type = dynamics_type or self.dynamics_type
         # 3. Compute next sample
         if dynamics_type == 'ODE':
             # ODE Sampling
-            prev_sample_mean = sample + model_output * dt
+            next_latents_mean = latents + noise_pred * dt
             std_dev_t = torch.zeros_like(sigma)
 
-            if prev_sample is None:
-                prev_sample = prev_sample_mean
+            if next_latents is None:
+                next_latents = next_latents_mean
 
             if compute_log_prob:
-                log_prob = -((prev_sample.detach() - prev_sample_mean) ** 2)
+                log_prob = -((next_latents.detach() - next_latents_mean) ** 2)
                 log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
 
         elif dynamics_type == "Flow-SDE":
             # FlowGRPO sde
             sigma_max = sigma_max or self.sigmas[1].item() # To avoid dividing by zero
-            sigma_max = to_broadcast_tensor(sigma_max, sample)
+            sigma_max = to_broadcast_tensor(sigma_max, latents)
             std_dev_t = torch.sqrt(sigma / (1 - torch.where(sigma == 1.0, sigma_max, sigma))) * noise_level # (batch_size, 1, 1)
 
-            prev_sample_mean = sample * (1 + std_dev_t**2 / (2 * sigma) * dt) + model_output * (1 + std_dev_t**2 * (1 - sigma) / (2 * sigma)) * dt
+            next_latents_mean = latents * (1 + std_dev_t**2 / (2 * sigma) * dt) + noise_pred * (1 + std_dev_t**2 * (1 - sigma) / (2 * sigma)) * dt
             
-            if prev_sample is None:
+            if next_latents is None:
                 # Non-deterministic step, add noise to it
                 variance_noise = randn_tensor(
-                    model_output.shape,
+                    noise_pred.shape,
                     generator=generator,
-                    device=model_output.device,
-                    dtype=model_output.dtype,
+                    device=noise_pred.device,
+                    dtype=noise_pred.dtype,
                 )
                 # Last term of Equation (9)
-                prev_sample = prev_sample_mean + std_dev_t * torch.sqrt(-1 * dt) * variance_noise
+                next_latents = next_latents_mean + std_dev_t * torch.sqrt(-1 * dt) * variance_noise
 
             if compute_log_prob:
                 std_variance = (std_dev_t * torch.sqrt(-1 * dt))
                 log_prob = (
-                    -((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * std_variance ** 2)
+                    -((next_latents.detach() - next_latents_mean) ** 2) / (2 * std_variance ** 2)
                     - torch.log(std_variance)
                     - torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
                 )
                 log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
 
         elif dynamics_type == "Dance-SDE":
-            pred_original_sample = sample - sigma * model_output
+            pred_original_sample = latents - sigma * noise_pred
             std_dev_t = noise_level * torch.sqrt(-1 * dt)
-            log_term = 0.5 * noise_level**2 * (sample - pred_original_sample * (1 - sigma)) / sigma**2
-            prev_sample_mean = sample + (model_output + log_term) * dt
-            if prev_sample is None:
+            log_term = 0.5 * noise_level**2 * (latents - pred_original_sample * (1 - sigma)) / sigma**2
+            next_latents_mean = latents + (noise_pred + log_term) * dt
+            if next_latents is None:
                 variance_noise = randn_tensor(
-                    model_output.shape,
+                    noise_pred.shape,
                     generator=generator,
-                    device=model_output.device,
-                    dtype=model_output.dtype,
+                    device=noise_pred.device,
+                    dtype=noise_pred.dtype,
                 )
-                prev_sample = prev_sample_mean + std_dev_t * variance_noise
+                next_latents = next_latents_mean + std_dev_t * variance_noise
             
             if compute_log_prob:
                 log_prob = (
-                    (-((prev_sample.detach() - prev_sample_mean) ** 2) / (2 * (std_dev_t**2)))
+                    (-((next_latents.detach() - next_latents_mean) ** 2) / (2 * (std_dev_t**2)))
                     - math.log(std_dev_t)
                     - torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
                 )
@@ -311,35 +313,36 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler):
         elif dynamics_type == "CPS":
             # FlowCPS
             std_dev_t = sigma_prev * torch.sin(noise_level * torch.pi / 2)
-            x0 = sample - sigma * model_output
-            x1 = sample + model_output * (1 - sigma)
-            prev_sample_mean = x0 * (1 - sigma_prev) + x1 * torch.sqrt(sigma_prev**2 - std_dev_t**2)
+            x0 = latents - sigma * noise_pred
+            x1 = latents + noise_pred * (1 - sigma)
+            next_latents_mean = x0 * (1 - sigma_prev) + x1 * torch.sqrt(sigma_prev**2 - std_dev_t**2)
         
-            if prev_sample is None:
+            if next_latents is None:
                 variance_noise = randn_tensor(
-                    model_output.shape,
+                    noise_pred.shape,
                     generator=generator,
-                    device=model_output.device,
-                    dtype=model_output.dtype,
+                    device=noise_pred.device,
+                    dtype=noise_pred.dtype,
                 )
-                prev_sample = prev_sample_mean + std_dev_t * variance_noise
+                next_latents = next_latents_mean + std_dev_t * variance_noise
 
             if compute_log_prob:
-                log_prob = -((prev_sample.detach() - prev_sample_mean) ** 2)
+                log_prob = -((next_latents.detach() - next_latents_mean) ** 2)
                 log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
 
 
         if not compute_log_prob:
             # Empty tensor as placeholder
-            log_prob = torch.empty((sample.shape[0]), dtype=torch.float32, device=model_output.device)
+            log_prob = torch.empty((latents.shape[0]), dtype=torch.float32, device=noise_pred.device)
 
         if not return_dict:
-            return (prev_sample, log_prob, prev_sample_mean, std_dev_t, dt)
+            return (next_latents, log_prob, next_latents_mean, std_dev_t, dt)
 
-        return FlowMatchEulerDiscreteSDESchedulerOutput(
-            prev_sample=prev_sample,
-            prev_sample_mean=prev_sample_mean,
-            std_dev_t=std_dev_t,
-            log_prob=log_prob,
-            dt=dt,
-        )
+        d = {}        
+        for k in return_kwargs:
+            if k in locals():
+                d[k] = locals()[k]
+            else:
+                logger.warning(f"Requested return keyword '{k}' is not available in the step output.")
+
+        return FlowMatchEulerDiscreteSDESchedulerOutput.from_dict(d)

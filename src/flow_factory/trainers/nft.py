@@ -80,6 +80,7 @@ class DiffusionNFTTrainer(BaseTrainer):
             with torch.no_grad(), self.autocast():
                     sample_kwargs = {
                         'compute_log_prob': False, # No need to compute log probs during sampling
+                        'extra_callback_kwargs': ['noise_pred'],
                         **self.training_args,
                     }
                     sample_kwargs.update(**batch)
@@ -241,41 +242,20 @@ class DiffusionNFTTrainer(BaseTrainer):
                     disable=not self.accelerator.is_local_main_process,
                 )):
                         # Get old velocity prediction
-                        old_log_prob = torch.stack(
-                            [sample.log_probs[timestep_index] for sample in batch],
+                        old_v_pred = torch.stack(
+                            [sample.extra_kwargs['noise_pred'][timestep_index] for sample in batch],
                             dim=0
-                        )
-                        adv = torch.stack(
-                            [sample.extra_kwargs['advantage'] for sample in batch],
-                            dim=0
-                        )
+                        ).detach()
 
                         with self.autocast():
                             # Forward pass
+                            return_kwargs = ['noise_pred', 'next_latents', 'latents']
                             output = self.adapter.forward(
                                 batch,
                                 timestep_index=timestep_index,
-                                compute_log_prob=True,
+                                compute_log_prob=False,
+                                return_kwargs=return_kwargs,
                             )
-
-                        # Clip advantages
-                        adv_clip_range = self.training_args.adv_clip_range
-                        adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
-                        # PPO-style clipped loss
-                        ratio = torch.exp(output.log_prob - old_log_prob)
-                        ratio_clip_range = self.training_args.clip_range
-
-                        unclipped_loss = -adv * ratio
-                        clipped_loss = -adv * torch.clamp(ratio, 1.0 + ratio_clip_range[0], 1.0 + ratio_clip_range[1])
-                        policy_loss = torch.mean(torch.maximum(unclipped_loss, clipped_loss))
-
-                        loss = policy_loss
-                        loss_info['ratio'].append(ratio.detach())
-                        loss_info['unclipped_loss'].append(unclipped_loss.detach())
-                        loss_info['clipped_loss'].append(clipped_loss.detach())
-                        loss_info['policy_loss'].append(policy_loss.detach())
-                        loss_info["clip_frac_high"].append(torch.mean((ratio > 1.0 + ratio_clip_range[1]).float()))
-                        loss_info["clip_frac_low"].append(torch.mean((ratio < 1.0 + ratio_clip_range[0]).float()))
 
                         # Backward
                         self.accelerator.backward(loss)

@@ -397,13 +397,13 @@ class QwenImageAdapter(BaseAdapter):
 
             # Scheduler step
             output = self.scheduler.step(
-                model_output=noise_pred,
+                noise_pred=noise_pred,
                 timestep=t,
-                sample=latents,
+                latents=latents,
                 compute_log_prob=compute_log_prob and current_noise_level > 0,
             )
             
-            latents = output.prev_sample.to(dtype)
+            latents = output.next_latents.to(dtype)
             all_latents.append(latents)
             
             if compute_log_prob:
@@ -575,10 +575,10 @@ class QwenImageAdapter(BaseAdapter):
         # 4. Compute log prob with given next_latents
         step_kwargs = filter_kwargs(self.scheduler.step, **kwargs)
         output = self.scheduler.step(
-            model_output=noise_pred,
+            noise_pred=noise_pred,
             timestep=timestep,
-            sample=latents,
-            prev_sample=next_latents,
+            latents=latents,
+            next_latents=next_latents,
             compute_log_prob=compute_log_prob,
             return_dict=True,
             **step_kwargs,
