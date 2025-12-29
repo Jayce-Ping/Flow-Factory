@@ -1,4 +1,4 @@
-# src/flow_factory/trainers/grpo_trainer.py
+# src/flow_factory/trainers/grpo.py
 """
 Group Relative Policy Optimization (GRPO) Trainer.
 Implements GRPO algorithm for flow matching models.
@@ -274,10 +274,6 @@ class GRPOTrainer(BaseTrainer):
                         loss_info["clip_frac_high"].append(torch.mean((ratio > 1.0 + ratio_clip_range[1]).float()))
                         loss_info["clip_frac_low"].append(torch.mean((ratio < 1.0 + ratio_clip_range[0]).float()))
 
-                        # Other normalization strategies:
-                        # 1. Temp-FlowGRPO
-                        # 2. GRPO-Guard
-
                         # Backward
                         self.accelerator.backward(loss)
                     
@@ -352,8 +348,8 @@ class GRPOGuardTrainer(GRPOTrainer):
     """
     GRPOGuard Trainer with reweighted loss.
     References:
-    [1] https://arxiv.org/abs/2510.22319
-    [2] https://arxiv.org/abs/2508.04324
+    [1] GRPO-Guard: https://arxiv.org/abs/2510.22319
+    [2] Temp-FlowGRPO: https://arxiv.org/abs/2508.04324
     """
     
     def optimize(self, samples: List[BaseSample]) -> None:

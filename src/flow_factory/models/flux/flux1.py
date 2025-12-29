@@ -6,6 +6,7 @@ from typing import Union, List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from PIL import Image
 import logging
+from collections import defaultdict
 
 from accelerate import Accelerator
 import torch
@@ -126,6 +127,7 @@ class Flux1Adapter(BaseAdapter):
         guidance_scale: Optional[float] = None,
         generator: Optional[torch.Generator] = None,
         compute_log_prob: bool = True,
+        extra_call_back_kwargs: List[str] = [],
     ) -> List[Flux1Sample]:
         """Execute generation and return FluxSample objects."""
         
@@ -178,6 +180,7 @@ class Flux1Adapter(BaseAdapter):
         # 5. Denoising loop
         all_latents = [latents]
         all_log_probs = [] if compute_log_prob else None
+        extra_call_back_res = defaultdict(list)
         
         for i, t in enumerate(timesteps):
             timestep = t.expand(batch_size).to(latents.dtype)
@@ -209,11 +212,28 @@ class Flux1Adapter(BaseAdapter):
             
             if compute_log_prob:
                 all_log_probs.append(output.log_prob)
+
+            if extra_call_back_kwargs:
+                capturable = {'noise_pred': noise_pred, 'noise_levels': current_noise_level}
+                for key in extra_call_back_kwargs:
+                    if hasattr(output, key):
+                        extra_call_back_res[key].append(getattr(output, key))
+                    elif key in capturable:
+                        extra_call_back_res[key].append(capturable[key])
+
         
         # 6. Decode images
         images = self.decode_latents(latents, height, width)
         
         # 7. Create samples
+        # Transpose `extra_call_back_res` lists to have batch dimension first
+        # (T, B, ...) -> (B, T, ...)
+        extra_call_back_res = {
+            k: torch.stack(v, dim=1)
+            if isinstance(v[0], torch.Tensor)
+            else list(zip(*v))
+            for k, v in extra_call_back_res.items()
+        }
         samples = [
             Flux1Sample(
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
@@ -227,7 +247,10 @@ class Flux1Adapter(BaseAdapter):
                 pooled_prompt_embeds=pooled_prompt_embeds[b],
                 image_ids=latent_image_ids,
                 log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
-                extra_kwargs={'guidance_scale': guidance_scale},
+                extra_kwargs={
+                    'guidance_scale': guidance_scale,
+                    **{k: v[b] for k, v in extra_call_back_res.items()}
+                },
             )
             for b in range(batch_size)
         ]

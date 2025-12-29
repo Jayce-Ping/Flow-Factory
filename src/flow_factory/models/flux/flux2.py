@@ -5,6 +5,7 @@ import os
 from typing import Union, List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from PIL import Image
+from collections import defaultdict
 
 from accelerate import Accelerator
 import torch
@@ -329,6 +330,9 @@ class Flux2Adapter(BaseAdapter):
         text_encoder_out_layers: Tuple[int] = (10, 20, 30),
         caption_upsample_temperature: Optional[float] = None,
         compute_log_prob: bool = False,
+
+        # Extra callback arguments
+        extra_call_back_kwargs: List[str] = [],
     ) -> List[Flux2Sample]:
         """
         Inference method for Flux.2 model for a single sample.
@@ -402,6 +406,8 @@ class Flux2Adapter(BaseAdapter):
         # 5. Run diffusion process
         all_latents = [latents]
         all_log_probs = [] if compute_log_prob else None
+        extra_call_back_res = defaultdict(list)
+
         for i, t in enumerate(timesteps):
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
                 current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
@@ -427,7 +433,6 @@ class Flux2Adapter(BaseAdapter):
                 noise_pred = noise_pred[:, : latents.size(1) :]
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents_dtype = latents.dtype
                 output = self.scheduler.step(
                     model_output=noise_pred,
                     timestep=t,
@@ -441,10 +446,28 @@ class Flux2Adapter(BaseAdapter):
                 if compute_log_prob:
                     all_log_probs.append(output.log_prob)
 
+                if extra_call_back_kwargs:
+                    capturable = {'noise_pred': noise_pred, 'noise_levels': current_noise_level}
+                    for key in extra_call_back_kwargs:
+                        if hasattr(output, key):
+                            extra_call_back_res[key].append(getattr(output, key))
+                        elif key in capturable:
+                            extra_call_back_res[key].append(capturable[key])
+
         # 6. Decode latents to images
         decoded_images = self.decode_latents(latents, latent_ids)
 
         # 7. Create samples
+
+        # Transpose `extra_call_back_res` lists to have batch dimension first
+        # (T, B, ...) -> (B, T, ...)
+        extra_call_back_res = {
+            k: torch.stack(v, dim=1)
+            if isinstance(v[0], torch.Tensor)
+            else list(zip(*v))
+            for k, v in extra_call_back_res.items()
+        }
+
         samples = [
             Flux2Sample(
                 # Denoising trajectory
@@ -468,7 +491,10 @@ class Flux2Adapter(BaseAdapter):
                 condition_images=images if images is not None else None,
                 image_latents=image_latents[b] if image_latents is not None else None,
                 image_latent_ids=image_latent_ids[b] if image_latent_ids is not None else None,
-                extra_kwargs={'guidance_scale': guidance_scale},
+                extra_kwargs={
+                    'guidance_scale': guidance_scale,
+                    **{k: v[b] for k, v in extra_call_back_res.items()}
+                },
             )
             for b in range(batch_size)
         ]

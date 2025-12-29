@@ -427,6 +427,9 @@ class QwenImageEditPlusAdapter(BaseAdapter):
         attention_kwargs: Optional[Dict[str, Any]] = {},
         max_sequence_length: int = 1024,
         compute_log_prob: bool = False,
+
+        # Callback arguments
+        extra_call_back_kwargs: List[str] = [],
         **kwargs,
     ):
         """Generate images using Qwen-Image-Edit Plus model."""
@@ -555,6 +558,7 @@ class QwenImageEditPlusAdapter(BaseAdapter):
         # 6. Denoising loop
         all_latents = [latents]
         all_log_probs = [] if compute_log_prob else None
+        extra_call_back_res = defaultdict(list)
 
         for i, t in enumerate(timesteps):
             timestep = t.expand(batch_size).to(latents.dtype)
@@ -614,8 +618,25 @@ class QwenImageEditPlusAdapter(BaseAdapter):
             if compute_log_prob:
                 all_log_probs.append(output.log_prob)
 
+            if extra_call_back_kwargs:
+                capturable = {'noise_pred': noise_pred, 'noise_levels': current_noise_level}
+                for key in extra_call_back_kwargs:
+                    if hasattr(output, key):
+                        extra_call_back_res[key].append(getattr(output, key))
+                    elif key in capturable:
+                        extra_call_back_res[key].append(capturable[key])
+
         # 7. Post-process results
         decoded_images = self.decode_latents(latents, height, width)
+
+        # Transpose `extra_call_back_res` lists to have batch dimension first
+        # (T, B, ...) -> (B, T, ...)
+        extra_call_back_res = {
+            k: torch.stack(v, dim=1)
+            if isinstance(v[0], torch.Tensor)
+            else list(zip(*v))
+            for k, v in extra_call_back_res.items()
+        }
 
         samples = [
             QwenImageEditPlusSample(

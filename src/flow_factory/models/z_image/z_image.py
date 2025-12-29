@@ -4,11 +4,13 @@ from __future__ import annotations
 import os
 from typing import Union, List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
-import torch
-from diffusers.pipelines.z_image.pipeline_z_image import ZImagePipeline
 from PIL import Image
+from collections import defaultdict
 import logging
+
+import torch
 from accelerate import Accelerator
+from diffusers.pipelines.z_image.pipeline_z_image import ZImagePipeline
 
 from ..adapter import BaseAdapter, BaseSample
 from ...hparams import *
@@ -159,21 +161,32 @@ class ZImageAdapter(BaseAdapter):
     @torch.no_grad()
     def inference(
         self,
+        # Generation parameters
         num_inference_steps: int = 50,
         guidance_scale: float = 5.0,
         height: Optional[int] = None,
         width: Optional[int] = None,
+        # Prompt
         prompt: Union[str, List[str]] = None,
         prompt_ids : Optional[torch.Tensor] = None,
         prompt_embeds: Optional[List[torch.FloatTensor]] = None,
+        # Negative prompt
         negative_prompt: Optional[Union[str, List[str]]] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[List[torch.FloatTensor]] = None,
+
+        # CFG options
         cfg_normalization: bool = False,
         cfg_truncation: Optional[float] = 1.0,
+
+        # Other parameters
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         max_sequence_length: int = 512,
         compute_log_prob: bool = True,
+
+        # Extra callback arguments
+        extra_call_back_kwargs: List[str] = [],
+        **kwargs
     ):
         """Generate images from text prompts using the Z-Image model."""
 
@@ -227,6 +240,7 @@ class ZImageAdapter(BaseAdapter):
 
         all_latents = [latents]
         all_log_probs = [] if compute_log_prob else None
+        extra_call_back_res = defaultdict(list)
         
         for i, t in enumerate(timesteps):
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
@@ -310,9 +324,27 @@ class ZImageAdapter(BaseAdapter):
             if compute_log_prob:
                 all_log_probs.append(output.log_prob)
 
+            if extra_call_back_kwargs:
+                capturable = {'noise_pred': noise_pred, 'noise_levels': current_noise_level}
+                for key in extra_call_back_kwargs:
+                    if hasattr(output, key):
+                        extra_call_back_res[key].append(getattr(output, key))
+                    elif key in capturable:
+                        extra_call_back_res[key].append(capturable[key])
+
+        # Decode latents to images
         images = self.decode_latents(latents)
 
         # Create samples
+
+        # Transpose `extra_call_back_res` lists to have batch dimension first
+        # (T, B, ...) -> (B, T, ...)
+        extra_call_back_res = {
+            k: torch.stack(v, dim=1)
+            if isinstance(v[0], torch.Tensor)
+            else list(zip(*v))
+            for k, v in extra_call_back_res.items()
+        }
         samples = [
             ZImageSample(
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
@@ -331,6 +363,7 @@ class ZImageAdapter(BaseAdapter):
                     'guidance_scale': guidance_scale,
                     'cfg_truncation': cfg_truncation,
                     'cfg_normalization': cfg_normalization,
+                    **{k: v[b] for k, v in extra_call_back_res.items()}
                 },
             )
             for b in range(batch_size)
