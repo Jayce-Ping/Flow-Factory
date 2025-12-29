@@ -1,7 +1,7 @@
 # Environment Configuration
 launcher: "accelerate"  # Options: accelerate
-config_file: config/accelerate_configs/fsdp_full_shard.yaml  # Path to distributed config file (optional)
-num_processes: 2  # Number of processes to launch (overrides config file)
+config_file: config/accelerate_configs/deepspeed_zero2.yaml  # Path to distributed config file (optional)
+num_processes: 8  # Number of processes to launch (overrides config file)
 main_process_port: 29500
 mixed_precision: "bf16"  # Options: no, fp16, bf16
 
@@ -11,17 +11,17 @@ logging_backend: "wandb"  # Options: wandb, swanlab, none
 
 # Data Configuration
 data:
-  dataset_dir: "dataset/pickscore"  # Path to dataset folder
+  dataset_dir: "dataset/t2is_neg"  # Path to dataset folder
   preprocessing_batch_size: 8  # Batch size for preprocessing
   dataloader_num_workers: 16  # Number of workers for DataLoader
   enable_preprocess: true  # Enable dataset preprocessing
-  force_reprocess: true  # Force reprocessing of the dataset
+  force_reprocess: false  # Force reprocessing of the dataset
   cache_dir: "~/jcy/.cache/flow_factory/datasets" # Cache directory for preprocessed datasets
   max_dataset_size: 1000  # Limit the maximum number of samples in the dataset
 
 # Model Configuration
 model:
-  finetune_type: 'full' # Options: full, lora
+  finetune_type: 'lora' # Options: full, lora
   lora_rank : 64
   lora_alpha : 128
   target_modules: "default" # Options: all, default, or list of module names like ["to_k", "to_q", "to_v", "to_out.0"]
@@ -34,8 +34,8 @@ model:
 train:
   # Training settings
   trainer_type: 'grpo'
-  enable_gradient_checkpointing: true  # Enable gradient checkpointing to save memory with extra compute
-  save_freq: 10  # Save frequency in epochs (0 to disable)
+  enable_gradient_checkpointing: false  # Enable gradient checkpointing to save memory with extra compute
+  save_freq: 20  # Save frequency in epochs (0 to disable)
   save_dir: "~/jcy/Flow-Factory"  # Directory for logs and checkpoints
 
   # Image settings
@@ -79,7 +79,7 @@ eval:
   seed: 42  # Eval seed
   guidance_scale: 4  # Guidance scale for sampling
   num_inference_steps: 50  # Number of eval timesteps
-  eval_freq: 0  # Eval frequency in epochs (0 to disable)
+  eval_freq: 20  # Eval frequency in epochs (0 to disable)
 
 # Reward Model Configuration
 reward:
