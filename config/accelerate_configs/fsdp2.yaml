@@ -8,7 +8,7 @@ fsdp_config:
   fsdp_offload_params: false
   fsdp_reshard_after_forward: true # FULL_SHARD. `false` for SHARD_GRAD_OP
   fsdp_state_dict_type: FULL_STATE_DICT
-  fsdp_cpu_ram_efficient_loading: true
+  fsdp_cpu_ram_efficient_loading: false # Set `false` to let all process load frozen weights like text_encoder for preprocessing.
   fsdp_activation_checkpointing: true 
   fsdp_sync_module_states: true
 machine_rank: 0

@@ -771,6 +771,10 @@ class BaseAdapter(ABC):
             `dict`: The state dictionary of the model potentially without full precision.
         ```
         """
+        def is_param_match_key(name, keys):
+            # Later to add re logic maybe
+            return any(k in name for k in keys)
+
         from accelerate.utils import compare_versions
 
         if self.accelerator.distributed_type == DistributedType.DEEPSPEED:
@@ -801,30 +805,29 @@ class BaseAdapter(ABC):
                 state_dict = clone_tensors_for_torch_save(self.accelerator.unwrap_model(model).state_dict())
         elif self.accelerator.is_fsdp2:
             from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
-            
             if state_dict_keys is not None:
                 # Temporarily mark unwanted params as frozen
                 keys_set = set(state_dict_keys)
-                original_requires_grad = {}
+                # This `requires_grad` trick does not work correctly. Don't know why.
+                original_state = {}
                 
                 # Freeze unwanted params
                 for name, param in model.named_parameters():
-                    original_requires_grad[name] = param.requires_grad
-                    param.requires_grad = name in keys_set
+                    original_state[name] = param.requires_grad
+                    logger.info(F"Param {name} has grad {param.requires_grad} and match {is_param_match_key(name, keys_set)}")
+                    param.requires_grad = is_param_match_key(name, keys_set)
                 
                 options = StateDictOptions(
-                    full_state_dict=True, 
-                    broadcast_from_rank0=True, 
-                    cpu_offload=True, 
-                    ignore_frozen_params=True
+                    full_state_dict=True,
+                    broadcast_from_rank0=True,
+                    cpu_offload=True,
+                    ignore_frozen_params=True,
                 )
                 state_dict = get_model_state_dict(model, options=options)
                 
                 # Restore original state
                 for name, param in model.named_parameters():
-                    if name in original_requires_grad:
-                        param.requires_grad = original_requires_grad[name]
-                
+                    param.requires_grad = original_state[name]
             else:
                 options = StateDictOptions(
                     full_state_dict=True, 
@@ -845,12 +848,13 @@ class BaseAdapter(ABC):
                 model = self.accelerator.unwrap_model(model)
             state_dict = model.state_dict()
 
-        state_dict = {
-            k: v for k, v in state_dict.items()
-            if (state_dict_keys is None or k in state_dict_keys)
-               and (not ignore_frozen_params or v.requires_grad)
-        }
+        # state_dict = {
+        #     k: v for k, v in state_dict.items()
+        #     if (state_dict_keys is None or is_param_match_key(k, state_dict_keys))
+        #        and (not ignore_frozen_params or v.requires_grad)
+        # }
 
+        logger.info(f"State_dict keys {state_dict.keys()}")
         return state_dict
     
     @classmethod
@@ -899,9 +903,10 @@ class BaseAdapter(ABC):
             state_dict = self.get_state_dict(
                 model,
                 unwrap=True,
-                state_dict_keys=None,
-                ignore_frozen_params=True,
-            )
+                # state_dict_keys=None,
+                state_dict_keys=self.lora_keys, # Logically, filtering will help, but 
+                ignore_frozen_params=True, # Logically it should be `True` to avoid extra GPU communication, but somehow will gather empty dict.
+            ) # Current work setting is `state_dict_keys=None` and `ignore_frozen_params=False`, it will gives correct lora adapter.safetensor
             if self.accelerator.is_main_process:
                 unwrapped.save_pretrained(
                     save_directory,
