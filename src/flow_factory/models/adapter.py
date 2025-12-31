@@ -802,27 +802,36 @@ class BaseAdapter(ABC):
         elif self.accelerator.is_fsdp2:
             from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
             
-            if state_dict_keys is not None or ignore_frozen_params:
+            if state_dict_keys is not None:
                 # Temporarily mark unwanted params as frozen
-                keys_set = set(state_dict_keys) if state_dict_keys is not None else set()
+                keys_set = set(state_dict_keys)
                 original_requires_grad = {}
+                
+                # Freeze unwanted params
                 for name, param in model.named_parameters():
-                    if name not in keys_set:
-                        original_requires_grad[name] = param.requires_grad
-                        param.requires_grad = False
+                    original_requires_grad[name] = param.requires_grad
+                    param.requires_grad = name in keys_set
                 
                 options = StateDictOptions(
-                    full_state_dict=True, broadcast_from_rank0=True, 
-                    cpu_offload=True, ignore_frozen_params=ignore_frozen_params
+                    full_state_dict=True, 
+                    broadcast_from_rank0=True, 
+                    cpu_offload=True, 
+                    ignore_frozen_params=True
                 )
                 state_dict = get_model_state_dict(model, options=options)
                 
-                # Restore
+                # Restore original state
                 for name, param in model.named_parameters():
                     if name in original_requires_grad:
                         param.requires_grad = original_requires_grad[name]
+                
             else:
-                options = StateDictOptions(full_state_dict=True, broadcast_from_rank0=True, cpu_offload=True)
+                options = StateDictOptions(
+                    full_state_dict=True, 
+                    broadcast_from_rank0=True, 
+                    cpu_offload=True, 
+                    ignore_frozen_params=ignore_frozen_params
+                )
                 state_dict = get_model_state_dict(model, options=options)
         elif self.accelerator.distributed_type == DistributedType.FSDP:
             from torch.distributed.fsdp import FullStateDictConfig, StateDictType
@@ -890,7 +899,7 @@ class BaseAdapter(ABC):
             state_dict = self.get_state_dict(
                 model,
                 unwrap=True,
-                state_dict_keys=self.lora_keys,
+                state_dict_keys=None,
                 ignore_frozen_params=True,
             )
             if self.accelerator.is_main_process:
@@ -1027,7 +1036,9 @@ class BaseAdapter(ABC):
                 # Handle dict-like configs (e.g., FrozenDict from diffusers)
                 with open(config_save_file, 'w', encoding='utf-8') as f:
                     json.dump(dict(unwrapped.config), f, indent=2, sort_keys=True)
-            logger.info(f"Model config saved in {config_save_file}")
+
+            if self.accelerator.is_main_process:
+                logger.info(f"Model config saved in {config_save_file}")
 
         # Save index if sharded
         if state_dict_split.is_sharded:
@@ -1047,7 +1058,8 @@ class BaseAdapter(ABC):
             )
         else:
             path_to_weights = os.path.join(save_directory, weights_name)
-            logger.info(f"Model weights saved in {path_to_weights}")
+            if self.accelerator.is_main_process:
+                logger.info(f"Model weights saved in {path_to_weights}")
 
     def save_checkpoint(
         self,

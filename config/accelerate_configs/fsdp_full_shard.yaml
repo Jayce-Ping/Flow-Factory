@@ -10,7 +10,7 @@ fsdp_config:
   fsdp_state_dict_type: FULL_STATE_DICT
   fsdp_sync_module_states: true
   fsdp_use_orig_params: true
-  fsdp_cpu_ram_efficient_loading: false # Set false here. It makes all ranks have the copy of unsharded params during loading for preprocessing.
+  fsdp_cpu_ram_efficient_loading: false
   fsdp_activation_checkpointing: true
 machine_rank: 0
 num_machines: 1
