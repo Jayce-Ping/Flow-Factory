@@ -1,4 +1,5 @@
 # src/flow_factory/rewards/pick_score.py
+from typing import Optional
 from accelerate import Accelerator
 from transformers import CLIPProcessor, CLIPModel
 from PIL import Image
@@ -19,12 +20,22 @@ class PickScoreRewardModel(BaseRewardModel):
         self.model = self.model.to(dtype=self.dtype)
 
     @torch.no_grad()
-    def __call__(self, prompt : list[str], image : list[Image.Image]):
+    def __call__(
+        self,
+        prompt : list[str],
+        image : Optional[list[Image.Image]] = None,
+        video : Optional[list[list[Image.Image]]] = None,
+    ):
         if not isinstance(prompt, list):
             prompt = [prompt]
 
-        if not isinstance(image, list):
-            image = [image]
+        # Image and Video can not be provided at the same time
+        if image is not None and video is not None:
+            raise ValueError("Only one of image or video can be provided.")
+        # If video is provided, take the middle frame
+        if video is not None:
+            mid_index = len(video[0]) // 2
+            image = [clip[mid_index] for clip in video]
             
         # Preprocess images
         image_inputs = self.processor(
