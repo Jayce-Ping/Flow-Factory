@@ -49,7 +49,12 @@ class DiffusionNFTTrainer(BaseTrainer):
                 self.epoch % self.log_args.save_freq == 0 and 
                 self.log_args.save_dir
             ):
-                self.save_checkpoint(self.log_args.save_dir, epoch=self.epoch)
+                save_dir = os.path.join(
+                    self.log_args.save_dir,
+                    str(self.config.run_name),
+                    'checkpoints',
+                )
+                self.save_checkpoint(save_dir, epoch=self.epoch)
 
             # Evaluation
             if (
