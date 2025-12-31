@@ -33,6 +33,11 @@ class DiffusionNFTTrainer(BaseTrainer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
+    @property
+    def enable_kl_penalty(self) -> bool:
+        """Check if KL penalty is enabled."""
+        return self.training_args.kl_beta > 0.0
+
     def start(self):
         """Main training loop."""
         while True:
@@ -300,8 +305,38 @@ class DiffusionNFTTrainer(BaseTrainer):
 
                         loss = policy_loss
 
-                        # KL-loss requires a copy of the original model. Not implemented here.
-
+                        if self.enable_kl_penalty:
+                            with self.autocast(), torch.no_grad(), self.adapter.use_ref_parameters():
+                                if self.training_args.kl_type == 'v-based':
+                                    # KL in velocity space
+                                    ref_output = self.adapter.forward(
+                                        batch,
+                                        timestep_index=timestep_index,
+                                        compute_log_prob=False,
+                                        return_kwargs=['noise_pred'],
+                                    )
+                                    kl_div = torch.mean(
+                                        ((output.noise_pred - ref_output.noise_pred) ** 2),
+                                        dim=tuple(range(1, output.noise_pred.ndim)), keepdim=True
+                                    ) / (2 * output.std_dev_t ** 2 + 1e-7)
+                                elif self.training_args.kl_type == 'x-based':
+                                    # KL in latent space
+                                    ref_output = self.adapter.forward(
+                                        batch,
+                                        timestep_index=timestep_index,
+                                        compute_log_prob=False,
+                                        return_kwargs=['next_latents_mean'],
+                                    )
+                                    kl_div = torch.mean(
+                                        ((output.next_latents_mean - ref_output.next_latents_mean) ** 2),
+                                        dim=tuple(range(1, output.next_latents_mean.ndim)), keepdim=True
+                                    ) / (2 * output.std_dev_t ** 2 + 1e-7)
+                            
+                            kl_div = torch.mean(kl_div)
+                            kl_penalty = self.training_args.kl_beta * kl_div
+                            loss += kl_penalty
+                            loss_info['kl_div'].append(kl_div.detach())
+                            loss_info['kl_penalty'].append(kl_penalty.detach())
                         loss_info["policy_loss"] = policy_loss.detach()
                         loss_info["unweighted_policy_loss"] = ori_policy_loss.mean().detach()
                         loss_info["loss"] = loss.detach()
