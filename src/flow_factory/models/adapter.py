@@ -706,6 +706,10 @@ class BaseAdapter(ABC):
         # LOCAL_STATE_DICT does not requires communication while others do
         return state_dict_type != StateDictType.LOCAL_STATE_DICT
 
+    def _is_param_sharded(self) -> bool:
+        """Check if parameters are sharded across ranks."""
+        return self._is_zero3() or self._is_fsdp2() or self._is_fsdp_param_sharded()
+
 
     def _requires_collective_state_dict(self) -> bool:
         """

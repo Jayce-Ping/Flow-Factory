@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, Tuple, List, Union
 from functools import partial
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from torch.utils.data import DataLoader
 from dataclasses import dataclass
 from PIL import Image
@@ -17,6 +18,9 @@ from ..models.adapter import BaseAdapter
 from ..data_utils.loader import get_dataloader
 from ..rewards import load_reward_model, BaseRewardModel
 from ..logger import load_logger
+from ..utils.logger_utils import setup_logger
+
+logger = setup_logger(__name__)
 
 class BaseTrainer(ABC):
     """
@@ -107,8 +111,12 @@ class BaseTrainer(ABC):
         return self.optimizer
 
     def _initialization(self):
+        # Fix for FSDP2 / FSDP Full Shard, synchronize frozen components like text encoder & VAE. Otherwise they may be uninitialized on Rank > 0.
+        if self.adapter._is_param_sharded():
+            self.adapter.on_load(self.accelerator.device)
+            self._synchronize_frozen_components()
+
         # Init dataloader and optimizer
-        # self.adapter.on_load(self.accelerator.device)
         self.dataloader, self.test_dataloader = self._init_dataloader()
         self.optimizer = self._init_optimizer()
         # Prepare everything with accelerator
@@ -125,6 +133,36 @@ class BaseTrainer(ABC):
         
         # Initialize reward model
         self._init_reward_model()
+
+    def _synchronize_frozen_components(self):
+        """
+        [CRITICAL FIX for FSDP2/FSDP Full Shard]
+        Force broadcast frozen components (Text Encoder / VAE) from Rank 0 to all other ranks.
+        This prevents Rank > 0 from having uninitialized (zero/nan) weights when they are NOT wrapped by FSDP.
+        """
+        if self.accelerator.num_processes <= 1:
+            return
+
+        logger.info(f"[Rank {self.accelerator.process_index}] Synchronizing frozen components...")
+        
+        # 1. Synchronize Text Encoders
+        for i, encoder in enumerate(self.adapter.text_encoders):
+            logger.info(f"Broadcasting Text Encoder {i} weights from Rank 0...")
+            for param in encoder.parameters():
+                # Ensure param is on the device for communication
+                param.data = param.data.to(self.accelerator.device)
+                dist.broadcast(param.data, src=0)
+        
+        # 2. Synchronize VAE (Optional, but recommended)
+        if hasattr(self.adapter, 'vae') and self.adapter.vae is not None:
+             logger.info(f"Broadcasting VAE weights from Rank 0...")
+             for param in self.adapter.vae.parameters():
+                param.data = param.data.to(self.accelerator.device)
+                dist.broadcast(param.data, src=0)
+        
+        # Barrier to ensure everyone is done
+        self.accelerator.wait_for_everyone()
+        logger.info(f"[Rank {self.accelerator.process_index}] Frozen components synchronized.")
 
     @abstractmethod
     def start(self, *args, **kwargs):

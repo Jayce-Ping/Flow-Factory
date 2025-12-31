@@ -1,14 +1,17 @@
 compute_environment: LOCAL_MACHINE
 distributed_type: FSDP
-downcast_bf16: 'yes'
+downcast_bf16: 'no'
 fsdp_config:
   fsdp_version: 2
   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
-  fsdp_cpu_ram_efficient_loading: true
+  fsdp_backward_prefetch: BACKWARD_PRE
+  fsdp_forward_prefetch: false
   fsdp_offload_params: false
-  fsdp_reshard_after_forward: true # FULL_SHARD. false for SHARD_GRAD_OP
+  fsdp_reshard_after_forward: true # FULL_SHARD. `false` for SHARD_GRAD_OP
   fsdp_state_dict_type: FULL_STATE_DICT
+  fsdp_cpu_ram_efficient_loading: false # Set false
   fsdp_activation_checkpointing: true 
+  fsdp_sync_module_states: true
 machine_rank: 0
 main_training_function: main
 mixed_precision: bf16  # or fp16
