@@ -666,6 +666,12 @@ class BaseAdapter(ABC):
         """Check if FSDP2 is enabled."""
         return getattr(self.accelerator, 'is_fsdp2', False)
 
+    def _is_fsdp_cpu_efficient_loading(self) -> bool:
+        """Check if FSDP efficient loading is enabled."""
+        if not self._is_fsdp():
+            return False
+        fsdp_plugin = self.accelerator.state.fsdp_plugin
+        return fsdp_plugin is not None and getattr(fsdp_plugin, "cpu_ram_efficient_loading", False)
 
     # ------------------------------ Shard Strategies ---------------------------------
     def _is_zero3(self) -> bool:

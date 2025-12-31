@@ -111,10 +111,13 @@ class BaseTrainer(ABC):
         return self.optimizer
 
     def _initialization(self):
-        # Fix for FSDP2 / FSDP Full Shard, synchronize frozen components like text encoder & VAE. Otherwise they may be uninitialized on Rank > 0.
-        # if self.adapter._is_param_sharded():
-        #     self.adapter.on_load(self.accelerator.device)
-        #     self._synchronize_frozen_components()
+        # Fix for FSDP, synchronize frozen components like text encoder & VAE.
+        # Otherwise they may be uninitialized on Rank > 0.
+        if self.adapter._is_fsdp_cpu_efficient_loading():
+            logger.info("FSDP CPU Efficient Loading detected. Synchronizing frozen components...")
+            self.adapter.on_load(self.accelerator.device)
+            self._synchronize_frozen_components()
+            self.adapter.off_load()
 
         # Init dataloader and optimizer
         self.dataloader, self.test_dataloader = self._init_dataloader()
@@ -136,7 +139,6 @@ class BaseTrainer(ABC):
 
     def _synchronize_frozen_components(self):
         """
-        [CRITICAL FIX for FSDP2/FSDP Full Shard]
         Force broadcast frozen components (Text Encoder / VAE) from Rank 0 to all other ranks.
         This prevents Rank > 0 from having uninitialized (zero/nan) weights when they are NOT wrapped by FSDP.
         """
