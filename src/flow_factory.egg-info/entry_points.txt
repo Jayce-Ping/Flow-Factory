@@ -1,3 +1,0 @@
-[console_scripts]
-ff-train = flow_factory.cli:train_cli
-flow-factory-train = flow_factory.cli:train_cli
