@@ -851,13 +851,12 @@ class BaseAdapter(ABC):
                 model = self.accelerator.unwrap_model(model)
             state_dict = model.state_dict()
 
-        # Filter by keys
+        # Filter by keys.
         state_dict = {
             k: v for k, v in state_dict.items()
             if is_param_match_key(k, state_dict_keys, strict=False)
         }
 
-        logger.info(f"State_dict keys {state_dict.keys()}")
         return state_dict
     
     @classmethod
