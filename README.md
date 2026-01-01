@@ -22,7 +22,7 @@
 
 | Model | Model Size | Model Type |
 |-------|------------|-----------|
-| [FLUX.1-Dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | 13B | flux1 |
+| [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) | 13B | flux1 |
 | [FLUX.2-dev](https://huggingface.co/black-forest-labs/FLUX.2-dev) | 30B | flux2 |
 | [Z-Image-Turbo](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) | 12B | z-image |
 | [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image) | 20B | qwen-image |
@@ -59,12 +59,19 @@ To use [Weights & Biases](https://wandb.ai/site/) or [SwanLab](https://github.co
 
 > [SwanLab](https://github.com/SwanHubX/SwanLab) is recommended for users in mainland China.
 
+After installation, set corresponding arguments in the config file:
+
+```yaml
+run_name: null  # Run name (auto: {model_type}_{finetune_type}_{timestamp})
+project: "Flow-Factory"  # Project name for logging
+logging_backend: "wandb"  # Options: wandb, swanlab, none
+```
+
 These trackers allow you to visualize both **training samples** and **metric curves** online:
 
 ![Online Image Samples](assets/wandb_images.png)
 
 ![Online Metric Examples](assets/wandb_metrics.png)
-
 
 ## Quick Start Example
 
@@ -116,7 +123,7 @@ For tasks involving conditioning images, use `train.jsonl` and `test.jsonl` in t
 {"prompt": "An astronaut riding a horse on Mars.", "image": "path/to/image2/png"}
 ```
 
-The default root directory for images is `dataset_dir/images`, and for videos, it is `dataset_dir/videos`. You can override these locations by setting the `image_dir` and `video_dir` variables in your `config` file:
+The default root directory for images is `dataset_dir/images`, and for videos, it is `dataset_dir/videos`. You can override these locations by setting the `image_dir` and `video_dir` variables in the config file:
 
 ```yaml
 data:
