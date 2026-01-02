@@ -275,6 +275,9 @@ class DiffusionNFTTrainer(BaseTrainer):
                         new_v_pred = output.noise_pred
 
                         # 2. Compute adv
+                        adv = torch.stack([
+                            sample.extra_kwargs['advantage'] for sample in batch
+                        ], dim=0)
                         adv_clip_range = self.training_args.adv_clip_range
                         adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
                         normalized_advantages_clip = (advantages / adv_clip_range[1]) / 2.0 + 0.5
