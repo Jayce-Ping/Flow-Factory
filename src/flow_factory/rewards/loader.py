@@ -8,11 +8,11 @@ from accelerate import Accelerator
 
 from .abc import BaseRewardModel
 from .registry import get_reward_model_class, list_registered_reward_models
-from ..hparams import Arguments
+from ..hparams import RewardArguments
 
 
 def load_reward_model(
-    config: Arguments,
+    reward_args: RewardArguments,
     accelerator: Accelerator,
 ) -> BaseRewardModel:
     """
@@ -22,7 +22,7 @@ def load_reward_model(
     Supports both built-in models and custom backends via python paths.
     
     Args:
-        config: Configuration containing reward_model_cls identifier
+        reward_args: reward model configuration arguments
         accelerator: Accelerator instance for distributed setup
     
     Returns:
@@ -33,21 +33,21 @@ def load_reward_model(
     
     Examples:
         # Using built-in reward model
-        config.reward_args.reward_model_cls = "PickScore"
-        reward_model = load_reward_model(config, accelerator)
+        reward_args.reward_model = "PickScore"
+        reward_model = load_reward_model(reward_args, accelerator)
         
         # Using custom reward model
-        config.reward_args.reward_model_cls = "my_package.rewards.ImageReward"
-        reward_model = load_reward_model(config, accelerator)
+        reward_args.reward_model = "my_package.rewards.ImageReward"
+        reward_model = load_reward_model(reward_args, accelerator)
     """
-    reward_model_identifier = config.reward_args.reward_model
+    reward_model_identifier = reward_args.reward_model
     
     try:
         # Get reward model class from registry or direct import
         reward_model_class = get_reward_model_class(reward_model_identifier)
         
         # Instantiate reward model
-        reward_model = reward_model_class(config=config, accelerator=accelerator)
+        reward_model = reward_model_class(reward_args=reward_args, accelerator=accelerator)
         
         return reward_model
         

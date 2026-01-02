@@ -149,6 +149,31 @@ For models like [FLUX.2-dev]((https://huggingface.co/black-forest-labs/FLUX.2-de
 {"prompt": "An astronaut riding a horse on Mars.", "videos": ["path/to/video2.png", "path/to/video3.png"]}
 ```
 
+## Reward Models
+
+Flow-Factory provides a flexible reward model system that supports both built-in and custom reward models for reinforcement learning.
+
+### Built-in Reward Models
+
+The following reward models are pre-registered and ready to use:
+
+| Name | Description | Reference |
+|------|-------------|-----------|
+| `PickScore` | CLIP-based aesthetic scoring model | [PickScore](https://huggingface.co/yuvalkirstain/PickScore_v1) |
+
+### Using Built-in Reward Models
+
+Simply specify the reward model name in your config file:
+```yaml
+reward:
+  reward_model: "PickScore"
+  dtype: "bfloat16"
+  device: "cuda"
+  batch_size: 16
+```
+
+Refer to [Rewards Guidance](guidance/rewards.md) for more information about advanced usage, such as creating a custom reward model.
+
 
 # Acknowledgements
 

@@ -72,6 +72,10 @@ class Arguments(ArgABC):
         default_factory=EvaluationArguments,
         metadata={"help": "Arguments for evaluation configuration."},
     )
+    eval_reward_args: Optional[RewardArguments] = field(
+        default=None,
+        metadata={"help": "Arguments for evaluation reward model. Defaults to `None` and uses reward_args."},
+    )
     log_args: LogArguments = field(
         default_factory=LogArguments,
         metadata={"help": "Arguments for logging configuration."},
@@ -112,6 +116,7 @@ class Arguments(ArgABC):
             'train': ('training_args', TrainingArguments),
             'eval': ('eval_args', EvaluationArguments),
             'reward': ('reward_args', RewardArguments),
+            'eval_reward': ('eval_reward_args', RewardArguments),
             'log': ('log_args', LogArguments),
         }
 

@@ -11,8 +11,8 @@ from ..hparams import *
 
 
 class PickScoreRewardModel(BaseRewardModel):
-    def __init__(self, config: Arguments, accelerator: Accelerator):
-        super().__init__(config, accelerator)
+    def __init__(self, reward_args: RewardArguments, accelerator: Accelerator):
+        super().__init__(reward_args, accelerator)
         processor_path = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"
         model_path = "yuvalkirstain/PickScore_v1"
         self.processor = CLIPProcessor.from_pretrained(processor_path)
@@ -75,7 +75,7 @@ class PickScoreRewardModel(BaseRewardModel):
         )
 
 def download_model():
-    scorer = PickScoreRewardModel(RewardArguments(device='cpu'))
+    scorer = PickScoreRewardModel(RewardArguments(device='cpu'), accelerator=None)
 
 if __name__ == "__main__":
     download_model()

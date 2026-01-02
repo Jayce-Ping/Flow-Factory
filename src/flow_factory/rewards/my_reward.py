@@ -10,11 +10,10 @@ from .abc import BaseRewardModel, RewardModelOutput
 from ..hparams import *
 
 class MyRewardModel(BaseRewardModel):
-    def __init__(self, config: Arguments, accelerator: Accelerator):
-        super().__init__(config, accelerator)
+    def __init__(self, reward_args: RewardArguments, accelerator: Accelerator):
+        super().__init__(reward_args, accelerator)
         # `super().__init__` gives you:
         # self.accelerator = accelerator
-        # reward_args = config.reward_args
         # self.reward_args = reward_args
         # self.device = self.accelerator.device if reward_args.device == torch.device('cuda') else reward_args.device
         # self.dtype = reward_args.dtype
@@ -26,8 +25,9 @@ class MyRewardModel(BaseRewardModel):
     @torch.no_grad()
     def compute_rewards(
         self,
-        prompt : list[str],
-        image : list[Image.Image],
+        prompt : List[str],
+        image : Optional[List[Image.Image]] = None,
+        video : Optional[List[List[Image.Image]]] = None,
         condition_images: Optional[List[List[Image.Image]]] = None,
         **kwargs,
     ) -> RewardModelOutput:
@@ -36,6 +36,7 @@ class MyRewardModel(BaseRewardModel):
         Args:
             prompt (list[str]): List of text prompts.
             image (list[Image.Image]): List of generated images corresponding to the prompts.
+            video (list[list[Image.Image]]): List of generated videos (each video is a list of frames) corresponding to the prompts.
             condition_images (Optional[List[List[Image.Image]]]): Optional list of condition images
                 (each element is a list of images. If only one condition image per prompt, this will be a list of single-element lists).
         Returns:

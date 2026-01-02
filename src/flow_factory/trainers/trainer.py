@@ -34,11 +34,14 @@ class BaseTrainer(ABC):
         ):
         self.accelerator = accelerator
         self.config = config
-        self.training_args = config.training_args
-        self.eval_args = config.eval_args
         self.log_args = config.log_args
-        self.reward_args = config.reward_args
         self.model_args = config.model_args
+
+        self.training_args = config.training_args
+        self.reward_args = config.reward_args
+
+        self.eval_args = config.eval_args
+        self.eval_reward_args = config.eval_reward_args or config.reward_args # If `eval_reward_args` is not given, use `reward_args`
 
         self.adapter = adapter
         self.epoch = 0
@@ -78,9 +81,20 @@ class BaseTrainer(ABC):
         # NOTE: This bug persists even with this context manager. DONOT USE ZeRO-3.
         # A possible solution: use DeepSpeed GatherParamter manually in the reward_model's `forward`.
         self.reward_model = load_reward_model(
-            config=self.config,
+            reward_args=self.reward_args,
             accelerator=self.accelerator,
         )
+        if (
+            self.eval_reward_args is None # This should never happen since __init__ has handled this
+            or self.eval_reward_args is self.reward_args # This happens when eval_reward_args is not given
+            or self.eval_reward_args.reward_model == self.reward_args.reward_model # Same reward configuration specified
+        ):
+            self.eval_reward_model = self.reward_model
+        else:
+            self.eval_reward_model = load_reward_model(
+                reward_args=self.eval_reward_args,
+                accelerator=self.accelerator,
+            )
         return self.reward_model
 
     def _init_dataloader(self) -> Tuple[DataLoader, Union[None, DataLoader]]:
