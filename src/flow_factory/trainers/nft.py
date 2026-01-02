@@ -280,7 +280,7 @@ class DiffusionNFTTrainer(BaseTrainer):
                         ], dim=0)
                         adv_clip_range = self.training_args.adv_clip_range
                         adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
-                        normalized_advantages_clip = (advantages / adv_clip_range[1]) / 2.0 + 0.5
+                        normalized_advantages_clip = (adv / adv_clip_range[1]) / 2.0 + 0.5
                         r = torch.clamp(normalized_advantages_clip, 0, 1)
 
                         # 3. Compute loss
