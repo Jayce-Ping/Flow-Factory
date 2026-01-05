@@ -44,7 +44,7 @@ train:
   enable_gradient_checkpointing: false  # Enable gradient checkpointing to save memory with extra compute
 
   # Image settings
-  resolution: 256  # Can be int or [height, width]
+  resolution: 384  # Can be int or [height, width]
   
   # Batch and sampling
   per_device_batch_size: 2  # Batch size per device
@@ -60,11 +60,11 @@ train:
   
   # Denoising process
   dynamics_type: "Flow-SDE"  # Options: Flow-SDE, Dance-SDE, CPS, ODE
-  num_inference_steps: 9  # Number of SDE timesteps
-  noise_level: 0.7  # Noise level for sampling
+  num_inference_steps: 8  # Number of SDE timesteps
+  noise_level: 0.9  # Noise level for sampling
   num_train_steps: 1  # Number of noise steps
   train_steps: [1, 2, 3]  # Custom noise window
-  guidance_scale: 3.5  # Guidance scale for sampling
+  guidance_scale: 2.5  # Guidance scale for sampling
   
   # Optimization
   seed: 42  # Random seed
@@ -79,16 +79,16 @@ train:
   
 # Evaluation settings
 eval:
-  resolution: 512  # Evaluation resolution
+  resolution: 1024  # Evaluation resolution
   per_device_batch_size: 1  # Eval batch size
   seed: 42  # Eval seed (defaults to training seed)
-  guidance_scale: 3.5  # Guidance scale for sampling
-  num_inference_steps: 9  # Number of eval timesteps
+  guidance_scale: 2.5  # Guidance scale for sampling
+  num_inference_steps: 20  # Number of eval timesteps
   eval_freq: 20  # Eval frequency in epochs (0 to disable)
 
 # Reward Model Configuration
 reward:
-  reward_model: "consistent_editing"  # Model name or path:class_name
+  reward_model: "PickScore"  # Model name or path:class_name
   dtype: "bfloat16"  # Options: float16, bfloat16, float32
   device: "cuda"  # Options: cpu, cuda
   batch_size: 16  # Inference batch size
