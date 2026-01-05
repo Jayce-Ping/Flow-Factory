@@ -17,7 +17,7 @@ data:
   enable_preprocess: true  # Enable dataset preprocessing
   force_reprocess: true  # Force reprocessing of the dataset
   cache_dir: "~/jcy/.cache/flow_factory/datasets" # Cache directory for preprocessed datasets
-  max_dataset_size: 1000  # Limit the maximum number of samples in the dataset
+  max_dataset_size: 128  # Limit the maximum number of samples in the dataset
   condition_image_size: [1024, 1024]  # Condition image size for kontext model
 
 # Model Configuration
