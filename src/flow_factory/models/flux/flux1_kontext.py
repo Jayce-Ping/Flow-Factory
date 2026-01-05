@@ -383,13 +383,13 @@ class Flux1KontextAdapter(BaseAdapter):
 
                 # Generated image & metadata
                 image=generated_images[b],
-                prompt_ids=prompt_ids[b] if prompt_ids is not None else None,
                 height=height,
                 width=width,
-                image_ids=latent_ids[b] if latent_ids is not None else None, # Store latent ids (after catenation)
+                image_ids=latent_ids, # Store latent ids (after catenation, no batch dimension)
 
                 # Prompt
                 prompt=prompt[b] if isinstance(prompt, list) else prompt,
+                prompt_ids=prompt_ids[b],
                 prompt_embeds=prompt_embeds[b],
                 pooled_prompt_embeds=pooled_prompt_embeds[b],
 

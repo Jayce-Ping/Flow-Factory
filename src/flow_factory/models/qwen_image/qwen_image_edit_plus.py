@@ -641,7 +641,7 @@ class QwenImageEditPlusAdapter(BaseAdapter):
                             extra_call_back_res[key].append(val)
 
         # 7. Post-process results
-        decoded_images = self.decode_latents(latents, height, width)
+        generated_images = self.decode_latents(latents, height, width)
 
         # Transpose `extra_call_back_res` tensors to have batch dimension first
         # (T, B, ...) -> (B, T, ...)
@@ -659,7 +659,7 @@ class QwenImageEditPlusAdapter(BaseAdapter):
                 log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
                 
                 # Generated image
-                image=decoded_images[b],
+                image=generated_images[b],
 
                 # Condition images
                 image_latents=image_latents[b] if image_latents is not None else None,

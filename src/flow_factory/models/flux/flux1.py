@@ -239,17 +239,24 @@ class Flux1Adapter(BaseAdapter):
         }
         samples = [
             Flux1Sample(
+                # Denoising trajectory
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
                 timesteps=timesteps,
+                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
+
+                # Prompt
                 prompt_ids=prompt_ids[b] if prompt_ids is not None else None,
+                prompt_embeds=prompt_embeds[b],
+                pooled_prompt_embeds=pooled_prompt_embeds[b],
+
+                # Image & metadata
                 height=height,
                 width=width,
                 prompt=prompt[b] if isinstance(prompt, list) else prompt,
                 image=images[b],
-                prompt_embeds=prompt_embeds[b],
-                pooled_prompt_embeds=pooled_prompt_embeds[b],
                 image_ids=latent_image_ids,
-                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
+
+                # Extra kwargs
                 extra_kwargs={
                     'guidance_scale': guidance_scale,
                     **{k: v[b] for k, v in extra_call_back_res.items()}

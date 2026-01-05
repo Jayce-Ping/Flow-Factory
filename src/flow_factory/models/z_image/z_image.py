@@ -350,18 +350,27 @@ class ZImageAdapter(BaseAdapter):
         }
         samples = [
             ZImageSample(
+                # Denoising trajectory
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
                 timesteps=timesteps,
+                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
+
+                # Generated image & metadata
                 height=height,
                 width=width,
                 image=images[b],
+
+                # Encoded prompt
                 prompt=prompt[b] if isinstance(prompt, list) else prompt,
                 prompt_ids=prompt_ids[b] if prompt_ids is not None else None,
                 prompt_embeds=prompt_embeds[b] if prompt_embeds is not None else None,
+
+                # Encoded negative prompt
                 negative_prompt=negative_prompt[b] if negative_prompt is not None else None,
                 negative_prompt_ids=negative_prompt_ids[b] if negative_prompt_ids is not None else None,
                 negative_prompt_embeds=negative_prompt_embeds[b] if negative_prompt_embeds is not None else None,
-                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
+
+                # Extra kwargs
                 extra_kwargs={
                     'guidance_scale': guidance_scale,
                     'cfg_truncation': cfg_truncation,
