@@ -157,7 +157,7 @@ class Flux1KontextAdapter(BaseAdapter):
             auto_resize: Whether to automatically resize images to preferred resolutions.
             generator: Optional random generator(s) for encoding.
         Returns:
-            Dictionary containing 'image_latents' and 'image_ids' tensors.
+            Dictionary containing resized PIL.Image 'condition_images' and 'image_latents' tensors.
         """
         device = self.pipeline.vae.device
         dtype = self.pipeline.vae.dtype
@@ -194,11 +194,11 @@ class Flux1KontextAdapter(BaseAdapter):
         image_latents = self.pipeline._pack_latents(
             image_latents, batch_size, num_channels_latents, image_latent_height, image_latent_width
         )
-        image_ids = self.pipeline._prepare_latent_image_ids(
-            batch_size, image_latent_height // 2, image_latent_width // 2, device, dtype
-        )
-        # image ids are the same as latent ids with the first dimension set to 1 instead of 0
-        image_ids[..., 0] = 1
+        # image_ids = self.pipeline._prepare_latent_image_ids(
+        #     batch_size, image_latent_height // 2, image_latent_width // 2, device, dtype
+        # )
+        # # image ids are the same as latent ids with the first dimension set to 1 instead of 0
+        # image_ids[..., 0] = 1
 
         return {
             'condition_images': images,
@@ -271,7 +271,7 @@ class Flux1KontextAdapter(BaseAdapter):
             pooled_prompt_embeds = pooled_prompt_embeds.to(device)
 
         # 3. Encode images if not encoded
-        if condition_images is None or image_latents is None or image_ids is None:
+        if condition_images is None or image_latents is None:
             encoded_image = self.encode_image(
                 images=images, 
                 condition_image_size=condition_image_size,
