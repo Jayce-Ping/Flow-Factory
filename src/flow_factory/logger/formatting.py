@@ -1,13 +1,57 @@
 # src/flow_factory/logger/formatting.py
 import os
 import tempfile
+import math
+
 import torch
 import numpy as np
 from PIL import Image
-from typing import Any, Dict, List, Union, Optional
+from typing import Any, Dict, List, Union, Optional, Tuple
 from dataclasses import dataclass, is_dataclass, asdict, field
-from ..models.adapter import BaseSample
+from ..models.samples import BaseSample, ImageConditionSample, VideoConditionSample
 from ..utils.base import numpy_to_pil_image, tensor_to_pil_image
+
+
+def _compute_optimal_grid(n: int) -> Tuple[int, int]:
+    """Compute optimal grid (rows, cols) for n images, preferring wider layouts."""
+    if n <= 0:
+        return (0, 0)
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+    return (rows, cols)
+
+def _concat_images_grid(images: List[Image.Image]) -> Image.Image:
+    """Concatenate images into optimal grid layout."""
+    if not images:
+        raise ValueError("Empty image list")
+    if len(images) == 1:
+        return images[0]
+    
+    rows, cols = _compute_optimal_grid(len(images))
+    
+    # Resize all to match first image
+    w, h = images[0].size
+    resized = [img.resize((w, h), Image.Resampling.LANCZOS) if img.size != (w, h) else img for img in images]
+    
+    grid = Image.new('RGB', (cols * w, rows * h))
+    for idx, img in enumerate(resized):
+        grid.paste(img.convert('RGB'), ((idx % cols) * w, (idx // cols) * h))
+    return grid
+
+def _to_pil_list(images: Union[Image.Image, List[Image.Image], torch.Tensor, np.ndarray, None]) -> List[Image.Image]:
+    """Convert various image types to List[PIL.Image]."""
+    if images is None:
+        return []
+    if isinstance(images, Image.Image):
+        return [images]
+    if isinstance(images, list) and images and isinstance(images[0], Image.Image):
+        return images
+    if isinstance(images, torch.Tensor):
+        return tensor_to_pil_image(images)
+    if isinstance(images, np.ndarray):
+        return numpy_to_pil_image(images)
+    return []
+
 
 @dataclass
 class LogImage:
@@ -143,36 +187,66 @@ class LogFormatter:
             clean_data[k] = cls._process_value(v)
         
         return clean_data
+    
+    @classmethod
+    def _build_caption(cls, sample: BaseSample) -> str:
+        """Build caption from reward and prompt."""
+        parts = []
+        if 'reward' in sample.extra_kwargs:
+            parts.append(f"{sample.extra_kwargs['reward']:.2f}")
+        if sample.prompt:
+            parts.append(sample.prompt[:50] + "..." if len(sample.prompt) > 50 else sample.prompt)
+        return " | ".join(parts)
 
     @classmethod
-    def _process_base_sample(cls, samples: List[BaseSample]) -> List[Union[LogImage, LogVideo]]:
+    def _process_sample(cls, samples: List[BaseSample]) -> List[Union[LogImage, LogVideo]]:
+        """Dispatch to appropriate handler based on sample type."""
         results = []
         for sample in samples:
-            caption_parts = []
-            if 'reward' in sample.extra_kwargs:
-                caption_parts.append(f"{sample.extra_kwargs['reward']:.2f}")
-            if sample.prompt:
-                caption_parts.append(sample.prompt[:50] + "..." if len(sample.prompt) > 50 else sample.prompt)
-            
-            final_caption = " | ".join(caption_parts)
-
-            if hasattr(sample, 'image') and sample.image is not None:
-                results.append(LogImage(sample.image, caption=final_caption))
-            
-            # For future extension to videos
-            # if hasattr(sample, 'video') and sample.video is not None:
-            #     results.append(LogVideo(sample.video, caption=final_caption))
-
+            if isinstance(sample, VideoConditionSample):
+                result = cls._process_video_condition_sample(sample)
+            elif isinstance(sample, ImageConditionSample):
+                result = cls._process_image_condition_sample(sample)
+            else:
+                result = cls._process_base_sample(sample)
+            if result:
+                results.append(result)
         return results
+    
+    @classmethod
+    def _process_base_sample(cls, sample: BaseSample) -> Optional[LogImage]:
+        """Handle basic sample with single generated image."""
+        if sample.image is None:
+            return None
+        return LogImage(sample.image, caption=cls._build_caption(sample))
         
+    @classmethod
+    def _process_image_condition_sample(cls, sample: ImageConditionSample) -> Optional[LogImage]:
+        """Handle sample with condition images + generated image, concatenated in grid."""
+        cond_imgs = _to_pil_list(sample.condition_images)
+        gen_imgs = _to_pil_list(sample.image)
+        all_imgs = cond_imgs + gen_imgs
+        
+        if not all_imgs:
+            return None
+        
+        grid = _concat_images_grid(all_imgs) if len(all_imgs) > 1 else all_imgs[0]
+        return LogImage(grid, caption=cls._build_caption(sample))
+    
+    @classmethod
+    def _process_video_condition_sample(cls, sample: VideoConditionSample) -> Optional[LogVideo]:
+        """Handle video condition sample (placeholder for future extension)."""
+        # TODO: Implement video grid concatenation
+        return None
+    
     @classmethod
     def _process_value(cls, value: Any) -> Any:
         """Processes a single value according to the formatting rules."""
         # Rule 0: BaseSample or List of BaseSample
         if isinstance(value, BaseSample):
             value = [value]
-        if cls._is_base_sample_collection(value):
-            return cls._process_base_sample(value)
+        if cls._is_sample_collection(value):
+            return cls._process_sample(value)
 
         # Rule 1: PIL Image
         if isinstance(value, Image.Image):
@@ -202,7 +276,7 @@ class LogFormatter:
         return value
 
     @classmethod
-    def _is_base_sample_collection(cls, value: Any) -> bool:
+    def _is_sample_collection(cls, value: Any) -> bool:
         """Checks if value is a list/tuple of BaseSample."""
         if isinstance(value, (list, tuple)):
             if len(value) == 0: return False
