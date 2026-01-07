@@ -41,7 +41,7 @@ class BaseSample(BaseOutput):
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for memory tracking, excluding non-tensor fields."""
-        result = asdict(self)
+        result = {f.name: getattr(self, f.name) for f in fields(self)}
         extra = result.pop('extra_kwargs', {})
         result.update(extra)
         return result

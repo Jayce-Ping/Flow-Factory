@@ -23,7 +23,7 @@ class SDESchedulerOutput(BaseOutput):
     noise_pred: Optional[torch.FloatTensor] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        return {f.name: getattr(self, f.name) for f in fields(self)}
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SDESchedulerOutput":
