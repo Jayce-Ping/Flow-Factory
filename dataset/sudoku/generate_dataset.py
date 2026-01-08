@@ -455,7 +455,10 @@ def generate_dataset(
 
 
 if __name__ == "__main__":
+    prompt = 'Generate an image showing the solved Sudoku grid, with all cells filled with legible digits 1-9.'
     generate_dataset(
         output_dir='./',
-        num_per_clue=200,
+        num_per_clue=128,
+        prompt=prompt,
+        clue_levels = [30, 40, 50, 60, 70, 75],
     )

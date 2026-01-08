@@ -114,6 +114,7 @@ For text-to-image and text-to-video tasks, the only required input is the **prom
 A hill in a sunset.
 An astronaut riding a horse on Mars.
 ```
+> Example: [dataset/pickscore](./dataset/pickscore/train.txt)
 
 Each line represents a single text prompt. Alternatively, you can use `train.jsonl` and `test.jsonl` in the following format:
 
@@ -121,6 +122,8 @@ Each line represents a single text prompt. Alternatively, you can use `train.jso
 {"prompt": "A hill in a sunset."}
 {"prompt": "An astronaut riding a horse on Mars."}
 ```
+
+> Example: [dataset/t2is](./dataset/t2is/train.jsonl)
 
 ## Image-to-Image & Image-to-Video
 
@@ -130,6 +133,8 @@ For tasks involving conditioning images, use `train.jsonl` and `test.jsonl` in t
 {"prompt": "A hill in a sunset.", "image": "path/to/image1.png"}
 {"prompt": "An astronaut riding a horse on Mars.", "image": "path/to/image2/png"}
 ```
+
+> Example: [dataset/sharegpt4o_image_mini](./dataset/sharegpt4o_image_mini/train.jsonl)
 
 The default root directory for images is `dataset_dir/images`, and for videos, it is `dataset_dir/videos`. You can override these locations by setting the `image_dir` and `video_dir` variables in the config file:
 

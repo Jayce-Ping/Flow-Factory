@@ -15,9 +15,6 @@ from ..hparams import *
 class SudokuRewardModel(BaseRewardModel):
     def __init__(self, reward_args: RewardArguments, accelerator: Accelerator):
         super().__init__(reward_args, accelerator)
-        self.size = 9
-        self.img_size = 512
-        self.cell_size = self.img_size / self.size
         self.model = AutoModelForImageTextToText.from_pretrained(
             "stepfun-ai/GOT-OCR-2.0-hf", device_map=self.device, torch_dtype=torch.bfloat16
         )
@@ -49,6 +46,111 @@ class SudokuRewardModel(BaseRewardModel):
         return [Image.fromarray(x.squeeze(-1) if x.shape[-1] == 1 else x) for x in img]
 
     @torch.no_grad()
+    def _batch_ocr(self, images: List[Image.Image]) -> List[str]:
+        """Batch OCR whole images using GOT-OCR-2.0."""
+        results = []
+        for i in range(0, len(images), self.reward_args.batch_size):
+            batch = images[i : i + self.reward_args.batch_size]
+            inputs = self.processor(batch, return_tensors="pt").to(self.device)
+            generate_ids = self.model.generate(
+                **inputs,
+                do_sample=False,
+                tokenizer=self.processor.tokenizer,
+                stop_strings="<|im_end|>",
+                max_new_tokens=256,
+            )
+            texts = self.processor.batch_decode(
+                generate_ids[:, inputs["input_ids"].shape[1]:], 
+                skip_special_tokens=True
+            )
+            results.extend(texts)
+        return results
+
+    def _extract_digits(self, text: str) -> str:
+        """Extract digits from OCR result, pad/truncate to 81 chars."""
+        digits = ''.join(ch for ch in text if ch.isdigit())
+        return digits.ljust(81, '0')[:81]
+
+    def _to_grid(self, digits: str) -> List[List[int]]:
+        """Convert 81-char string to 9x9 grid."""
+        return [[int(digits[i * 9 + j]) for j in range(9)] for i in range(9)]
+
+    def _grid_to_str(self, grid: List[List[int]]) -> str:
+        """Convert 9x9 grid to 81-char string."""
+        return ''.join(str(grid[i][j]) for i in range(9) for j in range(9))
+
+    def _find_solution(self, puzzle: List[List[int]]) -> Optional[List[List[int]]]:
+        """Backtracking solver, returns first solution or None."""
+        grid = copy.deepcopy(puzzle)
+        
+        def is_valid(r, c, num):
+            if num in grid[r]: return False
+            if num in [grid[i][c] for i in range(9)]: return False
+            br, bc = 3 * (r // 3), 3 * (c // 3)
+            return all(grid[br+i][bc+j] != num for i in range(3) for j in range(3))
+        
+        def solve():
+            for i in range(9):
+                for j in range(9):
+                    if grid[i][j] == 0:
+                        for num in range(1, 10):
+                            if is_valid(i, j, num):
+                                grid[i][j] = num
+                                if solve():
+                                    return True
+                                grid[i][j] = 0
+                        return False
+            return True
+        
+        return grid if solve() else None
+
+    def _is_valid_placement(self, grid: List[List[int]], row: int, col: int, num: int) -> bool:
+        """Check if placing num at (row, col) violates sudoku rules."""
+        if num == 0:
+            return True
+        # Check row
+        for j in range(9):
+            if j != col and grid[row][j] == num:
+                return False
+        # Check column
+        for i in range(9):
+            if i != row and grid[i][col] == num:
+                return False
+        # Check 3x3 box
+        br, bc = 3 * (row // 3), 3 * (col // 3)
+        for i in range(3):
+            for j in range(3):
+                if (br + i, bc + j) != (row, col) and grid[br + i][bc + j] == num:
+                    return False
+        return True
+
+    def _compute_reward(self, puzzle_str: str, solution_str: str) -> float:
+        """
+        Compute reward based on diff:
+        - Delete/modify original digit: -1
+        - Add non-conflicting digit: +1
+        - Add conflicting digit: -1
+        """
+        p = self._extract_digits(puzzle_str)
+        s = self._extract_digits(solution_str)
+        solution_grid = self._to_grid(s)
+        
+        score = 0
+        for idx in range(81):
+            row, col = divmod(idx, 9)
+            if p[idx] != '0':  # Original cell
+                if s[idx] != p[idx]:
+                    score -= 1  # Deleted or modified
+            else:  # Empty cell
+                if s[idx] != '0':
+                    if self._is_valid_placement(solution_grid, row, col, int(s[idx])):
+                        score += 1  # Valid addition
+                    else:
+                        score -= 1  # Conflicting addition
+        
+        return float(score)
+
+    @torch.no_grad()
     def __call__(
         self,
         prompt: List[str],
@@ -59,122 +161,17 @@ class SudokuRewardModel(BaseRewardModel):
         condition_images = [self._to_pil(cond_imgs) for cond_imgs in condition_images]
         batch_size = len(prompt)
         
-        # Collect all images for batch parsing
         puzzles = [cond[0] for cond in condition_images]
         solutions = list(image)
         
-        # Batch parse all images
-        all_grids = self._parse_grids_batch(puzzles + solutions)
-        puzzle_grids = all_grids[:batch_size]
-        solution_grids = all_grids[batch_size:]
+        # Batch OCR all images
+        all_texts = self._batch_ocr(puzzles + solutions)
+        puzzle_texts = all_texts[:batch_size]
+        solution_texts = all_texts[batch_size:]
         
         # Compute rewards
         rewards = torch.zeros(batch_size, device=self.device)
         for i in range(batch_size):
-            _, _, reward = self._compute_single_reward(puzzle_grids[i], solution_grids[i])
-            rewards[i] = reward
+            rewards[i] = self._compute_reward(puzzle_texts[i], solution_texts[i])
         
         return RewardModelOutput(rewards=rewards, extra_info={})
-    
-    def _crop_cells(self, img: Image.Image) -> List[Image.Image]:
-        """Crop 81 cells from a sudoku image."""
-        img = img.convert('RGB').resize((self.img_size, self.img_size), Image.Resampling.LANCZOS)
-        cs = self.cell_size
-        cells = []
-        for idx in range(81):
-            row, col = divmod(idx, 9)
-            x1, y1 = int(col * cs) + 2, int(row * cs) + 2
-            x2, y2 = int((col + 1) * cs) - 2, int((row + 1) * cs) - 2
-            cells.append(img.crop((x1, y1, x2, y2)))
-        return cells
-
-    @torch.no_grad()
-    def _batch_ocr(self, images: List[Image.Image]) -> List[str]:
-        """Batch OCR using GOT-OCR-2.0 with batch size limit."""
-        results = []
-        for i in range(0, len(images), self.reward_args.batch_size):
-            batch = images[i : i + self.reward_args.batch_size]
-            inputs = self.processor(batch, return_tensors="pt").to(self.device)
-            generate_ids = self.model.generate(
-                **inputs,
-                do_sample=False,
-                tokenizer=self.processor.tokenizer,
-                stop_strings="<|im_end|>",
-                max_new_tokens=1,
-            )
-            texts = self.processor.batch_decode(
-                generate_ids[:, inputs["input_ids"].shape[1]:], 
-                skip_special_tokens=True
-            )
-            results.extend(texts)
-        return results
-
-    def _parse_grids_batch(self, images: List[Image.Image]) -> List[List[List[int]]]:
-        """Parse multiple sudoku images to grids using batch OCR."""
-        all_cells = []
-        for img in images:
-            all_cells.extend(self._crop_cells(img))
-        
-        # Batch OCR all cells
-        ocr_results = self._batch_ocr(all_cells)
-        
-        # Reconstruct grids
-        grids = []
-        for img_idx in range(len(images)):
-            grid = [[0] * 9 for _ in range(9)]
-            for cell_idx in range(81):
-                text = ocr_results[img_idx * 81 + cell_idx]
-                row, col = divmod(cell_idx, 9)
-                for ch in text:
-                    if ch.isdigit() and ch != '0':
-                        grid[row][col] = int(ch)
-                        break
-            grids.append(grid)
-        return grids
-
-    def _compute_single_reward(self, puzzle: List[List[int]], solution: List[List[int]]) -> tuple:
-        """Compute reward: a1 (new digit accuracy) - a2 (old digit modification rate)."""
-        gt_solutions = self._find_solutions(puzzle, limit=1)
-        gt = gt_solutions[0] if gt_solutions else None
-        
-        new_correct = new_total = old_modified = old_total = 0
-        for i in range(9):
-            for j in range(9):
-                if puzzle[i][j] == 0:
-                    new_total += 1
-                    if gt and solution[i][j] == gt[i][j]:
-                        new_correct += 1
-                else:
-                    old_total += 1
-                    if solution[i][j] != puzzle[i][j]:
-                        old_modified += 1
-        
-        a1 = new_correct / new_total if new_total else 1.0
-        a2 = old_modified / old_total if old_total else 0.0
-        return a1, a2, a1 - a2
-
-    def _find_solutions(self, puzzle: List[List[int]], limit: int = 1) -> List[List[List[int]]]:
-        """Backtracking solver."""
-        solutions, grid = [], copy.deepcopy(puzzle)
-        
-        def is_valid(r, c, num):
-            if num in grid[r]: return False
-            if num in [grid[i][c] for i in range(9)]: return False
-            br, bc = 3 * (r // 3), 3 * (c // 3)
-            return all(grid[br+i][bc+j] != num for i in range(3) for j in range(3))
-        
-        def backtrack():
-            if len(solutions) >= limit: return
-            for i in range(9):
-                for j in range(9):
-                    if grid[i][j] == 0:
-                        for num in range(1, 10):
-                            if is_valid(i, j, num):
-                                grid[i][j] = num
-                                backtrack()
-                                grid[i][j] = 0
-                        return
-            solutions.append(copy.deepcopy(grid))
-        
-        backtrack()
-        return solutions
