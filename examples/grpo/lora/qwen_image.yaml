@@ -93,7 +93,6 @@ eval:
 # Reward Model Configuration
 reward:
   reward_model: "PickScore"  # Model name or path:class_name
-  dtype: "float32"  # Options: float16, bfloat16, float32
+  dtype: "bfloat16"  # Options: float16, bfloat16, float32
   device: "cuda"  # Options: cpu, cuda
-  reward_model_kwargs: null  # Additional kwargs for reward model
   batch_size: 16  # Inference batch size
