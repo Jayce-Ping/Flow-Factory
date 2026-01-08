@@ -23,7 +23,7 @@ class MyRewardModel(BaseRewardModel):
         pass
 
     @torch.no_grad()
-    def compute_rewards(
+    def __call__(
         self,
         prompt : List[str],
         image : Optional[List[Image.Image]] = None,
