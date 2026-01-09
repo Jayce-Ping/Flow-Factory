@@ -38,6 +38,7 @@
 | Algorithm      | `trainer_type` |
 |----------------|----------------|
 | GRPO           | grpo           |
+| GRPO-Guard     | grpo-guard     |
 | DiffusionNFT   | nft            |
 
 See [`Algorithm Guidance`](guidance/algorithms.md) for more information.
