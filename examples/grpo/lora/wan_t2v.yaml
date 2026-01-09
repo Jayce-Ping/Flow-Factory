@@ -67,7 +67,7 @@ train:
   noise_level: 0.7  # Noise level for sampling
   num_train_steps: 1  # Number of noise steps
   train_steps: [1, 2, 3]  # Custom noise window
-  guidance_scale: 3.5  # Guidance scale for sampling
+  guidance_scale: 5.0  # Guidance scale for sampling
   
   # Optimization
   seed: 42  # Random seed
@@ -82,11 +82,11 @@ train:
   
 # Evaluation settings
 eval:
-  resolution: 256  # Evaluation resolution
-  num_frames: 5 # Evaluation frames
+  resolution: 512  # Evaluation resolution
+  num_frames: 13 # Evaluation frames
   per_device_batch_size: 1  # Eval batch size
   seed: 42  # Eval seed (defaults to training seed)
-  guidance_scale: 3.5  # Guidance scale for sampling
+  guidance_scale: 5.0  # Guidance scale for sampling
   num_inference_steps: 28  # Number of eval timesteps
   eval_freq: 20  # Eval frequency in epochs (0 to disable)
 
