@@ -77,6 +77,12 @@ class Wan2_T2V_Adapter(BaseAdapter):
     @property
     def inference_modules(self) -> List[str]:
         """Modules taht are requires for inference and forward"""
+        if self.pipeline.config.boundary_ratio is None or self.pipeline.config.boundary_ratio <= 0:
+            return ['transformer', 'vae']
+
+        if self.pipeline.config.boundary_ratio >= 1:
+            return ['transformer_2', 'vae']
+
         return ['transformer', 'transformer_2', 'vae']
 
     def apply_lora(
