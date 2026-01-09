@@ -312,8 +312,6 @@ class Wan2_T2V_Adapter(BaseAdapter):
         # 3. Set scheduler
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
-        logger.info(f"timesteps: {timesteps}, sigmas: {self.scheduler.sigmas}")
-
 
         # 5. Prepare latent variables
         num_channels_latents = (

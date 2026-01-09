@@ -18,7 +18,7 @@ class WandbLogger(Logger):
         if isinstance(value, LogImage):
             return wandb.Image(value.value, caption=value.caption)
         elif isinstance(value, LogVideo):
-            return wandb.Video(value.value, caption=value.caption)
+            return wandb.Video(value.value, caption=value.caption, format=value.format)
         return value
 
     def _log_impl(self, data: Dict, step: int):

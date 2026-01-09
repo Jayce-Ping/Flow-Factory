@@ -145,6 +145,13 @@ class LogVideo:
     fps: int = 8
     _temp_path: Optional[str] = field(default=None, init=False, repr=False)
 
+    @property
+    def format(self) -> str:
+        """Get video format extension (without dot)."""
+        if isinstance(self._value, str):
+            return os.path.splitext(self._value)[1].lstrip('.').lower() or 'mp4'
+        return 'mp4'  # defaults to `mp4`
+    
     @classmethod
     def to_numpy(cls, value: Union[np.ndarray, torch.Tensor, List[Image.Image]]) -> np.ndarray:
         """Convert to numpy array (T, H, W, C), uint8."""
@@ -183,7 +190,14 @@ class LogVideo:
         fd, path = tempfile.mkstemp(suffix='.mp4')
         try:
             os.close(fd)
-            imageio.mimwrite(path, arr, fps=self.fps, codec='libx264', output_params=['-pix_fmt', 'yuv420p'])
+            imageio.mimwrite(
+                path, 
+                arr, 
+                fps=self.fps, 
+                format='FFMPEG',
+                codec='libx264', 
+                output_params=['-pix_fmt', 'yuv420p']
+            )
             self._temp_path = path
         except Exception:
             if os.path.exists(path):
