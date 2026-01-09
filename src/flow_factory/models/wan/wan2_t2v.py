@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 from collections import defaultdict
 
+import numpy as np
 from PIL import Image
 import torch
 from accelerate import Accelerator
@@ -25,8 +26,7 @@ logger = setup_logger(__name__)
 
 @dataclass
 class WanT2VSample(BaseSample):
-    video : Optional[List[List[Image.Image]]] = None
-
+    video : Optional[Union[np.ndarray, torch.Tensor, List[Image.Image]]] = None
 
 
 class Wan2_T2V_Adapter(BaseAdapter):
@@ -227,7 +227,7 @@ class Wan2_T2V_Adapter(BaseAdapter):
 
     def decode_latents(self, latents: torch.Tensor, output_type: Literal['pt', 'pil', 'np'] = 'pil', **kwargs) -> torch.Tensor:
         """Decode the latents using the VAE decoder."""
-        latents = latents.to(self.pipeline.vae.dtype)
+        latents = latents.float()
         latents_mean = (
             torch.tensor(self.pipeline.vae.config.latents_mean)
             .view(1, self.pipeline.vae.config.z_dim, 1, 1, 1)

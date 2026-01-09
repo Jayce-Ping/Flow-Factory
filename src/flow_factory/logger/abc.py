@@ -54,13 +54,12 @@ class Logger(ABC):
         return self._convert_to_platform(value)
     
     def _cleanup_temp_files(self, data: Dict):
-        """Recursively cleanup temporary files in logged data."""
         for value in data.values():
-            if isinstance(value, LogImage):
+            if isinstance(value, (LogImage, LogVideo)):
                 value.cleanup()
             elif isinstance(value, (list, tuple)):
                 for item in value:
-                    if isinstance(item, LogImage):
+                    if isinstance(item, (LogImage, LogVideo)):
                         item.cleanup()
 
     @abstractmethod

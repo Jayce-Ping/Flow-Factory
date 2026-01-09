@@ -138,27 +138,80 @@ class LogImage:
 
 @dataclass
 class LogVideo:
-    """Intermediate representation for a Video."""
-    _value: Union[str, np.ndarray, torch.Tensor] = field(repr=False)
+    """Intermediate representation for a Video with format conversion support."""
+    _value: Union[str, np.ndarray, torch.Tensor, List[Image.Image]] = field(repr=False)
     caption: Optional[str] = None
-    
-    def __init__(
-        self,
-        value: Union[str, np.ndarray, torch.Tensor],
-        caption: Optional[str] = None
-    ):
-        self._value = value
-        self.caption = caption
-    
+    fps: int = 8
+    _temp_path: Optional[str] = field(default=None, init=False, repr=False)
+
+    @classmethod
+    def to_numpy(cls, value: Union[np.ndarray, torch.Tensor, List[Image.Image]]) -> np.ndarray:
+        """Convert to numpy array (T, H, W, C), uint8."""
+        if isinstance(value, str):
+            raise ValueError("Cannot convert path to numpy")
+        
+        # Handle List[PIL.Image]
+        if isinstance(value, list) and value and isinstance(value[0], Image.Image):
+            frames = [np.array(img.convert('RGB')) for img in value]
+            arr = np.stack(frames, axis=0)
+        elif isinstance(value, torch.Tensor):
+            arr = value.detach().cpu().numpy()
+        else:
+            arr = value
+        
+        # (T, C, H, W) -> (T, H, W, C) if channels-first
+        if arr.ndim == 4 and arr.shape[1] in (1, 3, 4) and arr.shape[1] < arr.shape[2]:
+            arr = np.transpose(arr, (0, 2, 3, 1))
+        elif arr.ndim == 3:
+            arr = arr[..., np.newaxis]
+        
+        # Normalize to uint8
+        if arr.dtype != np.uint8:
+            arr = ((arr * 255) if arr.max() <= 1.0 else arr).clip(0, 255).astype(np.uint8)
+        return arr
+
     @property
-    def value(self) -> Union[str, np.ndarray, torch.Tensor]:
-        """Get the original value."""
-        return self._value
-    
+    def value(self) -> str:
+        """Get video file path (converts tensor/array/frames to mp4)."""
+        if self._temp_path:
+            return self._temp_path
+        if isinstance(self._value, str):
+            return self._value
+        
+        arr = self.to_numpy(self._value)
+        fd, path = tempfile.mkstemp(suffix='.mp4')
+        try:
+            os.close(fd)
+            import imageio
+            imageio.mimwrite(path, arr, fps=self.fps, codec='libx264', output_params=['-pix_fmt', 'yuv420p'])
+            self._temp_path = path
+        except Exception:
+            if os.path.exists(path):
+                os.unlink(path)
+            raise
+        return self._temp_path
+
     @value.setter
-    def value(self, val: Union[str, np.ndarray, torch.Tensor]):
-        """Set the value."""
+    def value(self, val: Union[str, np.ndarray, torch.Tensor, List[Image.Image]]):
+        self.cleanup()
         self._value = val
+        self._temp_path = None
+
+    def cleanup(self):
+        if self._temp_path and os.path.exists(self._temp_path):
+            try:
+                os.unlink(self._temp_path)
+            finally:
+                self._temp_path = None
+
+    def __del__(self):
+        self.cleanup()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.cleanup()
 
 class LogFormatter:
     """
