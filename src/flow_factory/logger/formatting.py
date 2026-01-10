@@ -20,6 +20,9 @@ from ..utils.base import (
     tensor_list_to_pil_image,
     numpy_list_to_pil_image,
 )
+from ..utils.logger_utils import setup_logger
+
+logger = setup_logger(__name__)
 
 
 # ------------------------------------------- Helper Functions -------------------------------------------
@@ -287,16 +290,23 @@ class LogFormatter:
     def _process_sample(cls, samples: List[BaseSample]) -> List[Union[LogImage, LogVideo]]:
         """Dispatch to appropriate handler based on sample type."""
         results = []
+        # If there are inherit relationships, order matters - more specific types should come first
         sample_cls_to_handler = {
-            T2ISample: cls._process_t2i_sample,
-            T2VSample: cls._process_t2v_sample,
-            I2ISample: cls._process_i2i_sample,
-            I2VSample: cls._process_i2v_sample,
             V2VSample: cls._process_v2v_sample,
+            I2VSample: cls._process_i2v_sample,
+            I2ISample: cls._process_i2i_sample,
+            T2VSample: cls._process_t2v_sample,
+            T2ISample: cls._process_t2i_sample,
         }
+
+        def get_handler(sample: BaseSample):
+            for cls_type, handler in sample_cls_to_handler.items():
+                if isinstance(sample, cls_type):
+                    return handler
+            return cls._process_base_sample
+
         for sample in samples:
-            handler = sample_cls_to_handler.get(type(sample), cls._process_base_sample)
-            result = handler(sample)
+            result = get_handler(sample)(sample)
             if result:
                 results.append(result)
         return results
