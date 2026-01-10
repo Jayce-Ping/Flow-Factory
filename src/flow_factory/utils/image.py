@@ -39,7 +39,11 @@ ImageBatch = Union[
 ]
 """Type alias for a batch of image lists."""
 
-ImageBatchList = List[ImageBatch]
+ImageBatchList = Union[
+    List[ImageBatch],
+    torch.Tensor,
+    np.ndarray,
+]
 """Type alias for a list of image batches."""
 
 
@@ -230,26 +234,30 @@ def is_valid_image_batch(images: ImageBatch) -> bool:
     return False
 
 
-def is_valid_image_batch_list(image_batches: ImageBatchList) -> bool:
+def is_valid_image_batch_list(image_batches: Union[ImageBatchList, torch.Tensor, np.ndarray]) -> bool:
     """
-    Check if the input is a valid batch of image lists.
+    Check if the input is a valid batch of image lists. Useful for batch input of multiple conditioning images per sample.
     
-    Args:
-        image_batches: Batch of image lists, e.g., [[img1, img2], [img3], [img4, img5, img6]].
-    
-    Returns:
-        bool: True if valid:
-            - Outer list is non-empty
-            - Each inner element is either a valid image list or an empty list
-    
-    Note:
-        Empty inner lists are allowed (some samples may have no images).
-    
-    Example:
-        >>> batch = [[Image.new('RGB', (64, 64))], [], [Image.new('RGB', (64, 64)) for _ in range(3)]]
-        >>> is_valid_image_batch_list(batch)
-        True
+    Supported formats:
+        - List[ImageBatch]: Ragged batches (different sizes allowed)
+        - torch.Tensor: Shape (B, N, C, H, W) - uniform batches
+        - np.ndarray: Shape (B, N, H, W, C) - uniform batches
     """
+    # 5D Tensor: (B, N, C, H, W)
+    if isinstance(image_batches, torch.Tensor):
+        if image_batches.ndim != 5:
+            return False
+        b, n, c, h, w = image_batches.shape
+        return b > 0 and n > 0 and c in (1, 3, 4) and h > 0 and w > 0
+    
+    # 5D NumPy: (B, N, H, W, C)
+    if isinstance(image_batches, np.ndarray):
+        if image_batches.ndim != 5:
+            return False
+        b, n, h, w, c = image_batches.shape
+        return b > 0 and n > 0 and h > 0 and w > 0 and c in (1, 3, 4)
+    
+    # List[ImageBatch]
     if not isinstance(image_batches, list) or len(image_batches) == 0:
         return False
     

@@ -55,6 +55,14 @@ class Wan2_T2V_Adapter(BaseAdapter):
         scheduler_config.update(sde_config)
         return UniPCMultistepSDEScheduler(**scheduler_config)
     
+    def apply_lora(
+        self,
+        target_modules: Union[str, List[str]],
+        components: Union[str, List[str]] = ['transformer', 'transformer_2'],
+    ) -> Union[PeftModel, Dict[str, PeftModel]]:
+        return super().apply_lora(target_modules=target_modules, components=components)
+    
+    # ============================ Module Management ============================
     @property
     def default_target_modules(self) -> List[str]:
         """Default LoRA target modules for Wan transformer."""
@@ -79,14 +87,8 @@ class Wan2_T2V_Adapter(BaseAdapter):
             return ['transformer_2', 'vae']
 
         return ['transformer', 'transformer_2', 'vae']
-
-    def apply_lora(
-        self,
-        target_modules: Union[str, List[str]],
-        components: Union[str, List[str]] = ['transformer', 'transformer_2'],
-    ) -> Union[PeftModel, Dict[str, PeftModel]]:
-        return super().apply_lora(target_modules=target_modules, components=components)
     
+    # ======================== Component Getters & Setters ========================
     @property
     def transformer_2(self) -> torch.nn.Module:
         return self.get_component('transformer_2')
@@ -103,7 +105,7 @@ class Wan2_T2V_Adapter(BaseAdapter):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ):
-        device = device or self.pipeline._execution_device
+        device = device or self.pipeline.text_encoder.device
         dtype = dtype or self.pipeline.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
@@ -166,7 +168,8 @@ class Wan2_T2V_Adapter(BaseAdapter):
             dtype: (`torch.dtype`, *optional*):
                 torch dtype
         """
-        device = device or self.pipeline._execution_device
+        device = device or self.pipeline.text_encoder.device
+        dtype = dtype or self.pipeline.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
         batch_size = len(prompt)

@@ -20,7 +20,7 @@ data:
   preprocessing_batch_size: 8  # Batch size for preprocessing
   dataloader_num_workers: 16  # Number of workers for DataLoader
   enable_preprocess: true  # Enable dataset preprocessing
-  force_reprocess: false  # Force reprocessing of the dataset
+  force_reprocess: true  # Force reprocessing of the dataset
   cache_dir: "~/jcy/.cache/flow_factory/datasets" # Cache directory for preprocessed datasets
   max_dataset_size: 1000  # Limit the maximum number of samples in the dataset
 
@@ -47,9 +47,7 @@ log:
 train:
   # Training settings
   trainer_type: 'grpo'
-  enable_gradient_checkpointing: false  # Enable gradient checkpointing to save memory with extra compute
-  save_freq: 20  # Save frequency in epochs (0 to disable)
-  save_dir: "~/jcy/Flow-Factory"  # Directory for logs and checkpoints
+  enable_gradient_checkpointing: true  # Enable gradient checkpointing to save memory with extra compute
 
   # Video settings
   resolution: 256  # Can be int or [height, width]
@@ -88,7 +86,7 @@ train:
   
 # Evaluation settings
 eval:
-  resolution: 512  # Evaluation resolution
+  resolution: 480  # Evaluation resolution
   num_frames: 13 # Evaluation frames
   per_device_batch_size: 1  # Eval batch size
   seed: 42  # Eval seed (defaults to training seed)

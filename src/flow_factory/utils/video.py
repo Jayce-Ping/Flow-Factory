@@ -44,7 +44,11 @@ VideoBatch = Union[
 ]
 """Type alias for a batch of videos in various formats."""
 
-VideoBatchList = List[VideoBatch]
+VideoBatchList = Union[
+    List[VideoBatch],
+    torch.Tensor,
+    np.ndarray,
+]
 
 __all__ = [
     # Type aliases
@@ -241,23 +245,42 @@ def is_valid_video_batch(videos: Union[VideoFramesBatch, torch.Tensor, np.ndarra
     
     return False
 
-def is_valid_video_batch_list(video_batches: List[VideoBatch]) -> bool:
+def is_valid_video_batch_list(video_batches: VideoBatchList) -> bool:
     """
-    Check if the input is a valid list of video batches.
+    Check if the input is a valid list of video batches. Useful for batch input of multiple videos per sample.
+    
+    Supported formats:
+        - List[VideoBatch]: Ragged batches (different sizes allowed)
+        - torch.Tensor: Shape (B, N, T, C, H, W) - uniform batches
+        - np.ndarray: Shape (B, N, T, H, W, C) - uniform batches
     
     Args:
-        video_batches: List of video batches.
+        video_batches: List of video batches or stacked 6D array/tensor.
     
     Returns:
-        bool: True if valid:
-            - Outer list is non-empty
-            - Each inner element is either a valid video batch or an empty list
+        bool: True if valid.
     
     Example:
-        >>> batch = [[[Image.new('RGB', (64, 64)) for _ in range(16)]], []]
-        >>> is_valid_video_batch_list(batch)
+        >>> # 6D Tensor
+        >>> tensor = torch.rand(2, 3, 16, 3, 64, 64)  # 2 samples, 3 videos each, 16 frames
+        >>> is_valid_video_batch_list(tensor)
         True
     """
+    # 6D Tensor: (B, N, T, C, H, W)
+    if isinstance(video_batches, torch.Tensor):
+        if video_batches.ndim != 6:
+            return False
+        b, n, t, c, h, w = video_batches.shape
+        return b > 0 and n > 0 and t > 0 and c in (1, 3, 4) and h > 0 and w > 0
+    
+    # 6D NumPy: (B, N, T, H, W, C)
+    if isinstance(video_batches, np.ndarray):
+        if video_batches.ndim != 6:
+            return False
+        b, n, t, h, w, c = video_batches.shape
+        return b > 0 and n > 0 and t > 0 and h > 0 and w > 0 and c in (1, 3, 4)
+    
+    # List[VideoBatch]
     if not isinstance(video_batches, list) or len(video_batches) == 0:
         return False
     

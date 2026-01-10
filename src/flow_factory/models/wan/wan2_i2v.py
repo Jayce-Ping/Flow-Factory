@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Union, List, Dict, Any, Optional, Tuple, Literal
+from typing import Union, List, Dict, Any, Optional, Tuple, Literal, Iterable
 import logging
 from dataclasses import dataclass
 from collections import defaultdict
@@ -54,6 +54,7 @@ class WanI2VSample(I2VSample):
 class Wan2_I2V_Adapter(BaseAdapter):
     def __init__(self, config: Arguments, accelerator : Accelerator):
         super().__init__(config, accelerator)
+        self._has_warned_multi_image = False
     
     def load_pipeline(self) -> WanImageToVideoPipeline:
         return WanImageToVideoPipeline.from_pretrained(
@@ -102,6 +103,13 @@ class Wan2_I2V_Adapter(BaseAdapter):
 
         return ['transformer', 'transformer_2', 'vae']
 
+
+    @property
+    def preprocessing_modules(self) -> List[str]:
+        """Modules that are requires for preprocessing"""
+        return ['text_encoders', 'vae', 'image_encoder']
+
+
     def apply_lora(
         self,
         target_modules: Union[str, List[str]],
@@ -109,6 +117,16 @@ class Wan2_I2V_Adapter(BaseAdapter):
     ) -> Union[PeftModel, Dict[str, PeftModel]]:
         return super().apply_lora(target_modules=target_modules, components=components)
     
+
+    # ======================= Components Getters & Setters =======================
+    @property
+    def image_encoder(self) -> torch.nn.Module:
+        return self.get_component('image_encoder')
+
+    @image_encoder.setter
+    def image_encoder(self, module: torch.nn.Module):
+        self.set_prepared('image_encoder', module)
+
     @property
     def transformer_2(self) -> torch.nn.Module:
         return self.get_component('transformer_2')
@@ -125,7 +143,7 @@ class Wan2_I2V_Adapter(BaseAdapter):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ):
-        device = device or self.pipeline._execution_device
+        device = device or self.pipeline.text_encoder.device
         dtype = dtype or self.pipeline.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
@@ -188,7 +206,8 @@ class Wan2_I2V_Adapter(BaseAdapter):
             dtype: (`torch.dtype`, *optional*):
                 torch dtype
         """
-        device = device or self.pipeline._execution_device
+        device = device or self.pipeline.text_encoder.device
+        dtype = dtype or self.pipeline.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
         batch_size = len(prompt)
@@ -238,21 +257,23 @@ class Wan2_I2V_Adapter(BaseAdapter):
         self,
         images: WanPipelineImageInput, # A batch of images or a single image
         device: Optional[torch.device] = None,
+        **kwargs,
     ) -> Dict[str, torch.Tensor]:
-        if isinstance(images, Image.Image):
-            images = [images]
+        
+        images = self._standardize_image_input(
+            images,
+            output_type='pil',
+        )
         
         if not is_valid_image_batch(images):
-            raise ValueError(f'Invalid image input for encoding: {type(images)}. Expected a single image or a batch of images.')
-        
-        input_images = self._standardize_image_input(images, output_type='pt')
+            raise ValueError(f"Invalid image input type: {type(images)}. Must be a PIL Image, numpy array, torch tensor, or a list of these types.")
 
         device = device or self.device
-        images = self.pipeline.image_processor(images=input_images, return_tensors="pt").to(device)
+        images = self.pipeline.image_processor(images=images, return_tensors="pt").to(device)
         image_embeds = self.pipeline.image_encoder(**images, output_hidden_states=True)
         return {
             'image_embeds': image_embeds.hidden_states[-2],
-            'condition_images': input_images, # Keep the standardized input images, numerically normalized to [0, 1]
+            'condition_images': images['pixel_values'], # Shape: (B, C, H, W), where H = W = 224 as CLIP default, normalized in [-1, 1]
         }
     
     def _standardize_image_input(
@@ -265,9 +286,10 @@ class Wan2_I2V_Adapter(BaseAdapter):
         """
         if isinstance(images, Image.Image):
             images = [images]
-        elif isinstance(images, list) and all(isinstance(batch, list) for batch in images):
+        elif is_valid_image_batch_list(images):
             # A list of list of images
-            if any(len(batch) > 1 for batch in images):
+            if any(len(batch) > 1 for batch in images) and not self._has_warned_multi_image:
+                self._has_warned_multi_image = True
                 logger.warning(
                     "Multiple condition images are not supported for Wan2_I2V. Only the first image of each batch will be used."
                 )
@@ -286,52 +308,6 @@ class Wan2_I2V_Adapter(BaseAdapter):
         **kwargs
     ):
         pass
-
-    # ========================Preprocessing ========================
-    def preprocess_func(
-        self,
-        prompt: List[str],
-        images: Union[List[WanPipelineImageInput], torch.Tensor, np.ndarray],
-        **kwargs
-    ) -> Dict[str, Union[List[Any], torch.Tensor]]:
-        r"""
-        Preprocess the batched inputs for the model.
-
-        Args:
-            prompt (`List[str]`):
-                The prompt to guide the image generation.
-            images (`List[WanPipelineImageInput]`):
-                The image or images to be used as conditioning input.
-        """
-        device = self.device
-        if isinstance(prompt, str):
-            prompt = [prompt]
-        batch_size = len(prompt)
-        assert len(images) == batch_size, f"Number of images ({len(images)}) must match batch size ({batch_size})"
-
-        # 1. Encode prompt
-        prompt_encode_kwargs = filter_kwargs(self.encode_prompt, **kwargs)
-        prompt_encode_kwargs.update({
-            'prompt': prompt,
-            'device': device,
-        })
-        prompt_results = self.encode_prompt(**prompt_encode_kwargs)
-
-        # 2. Encode images - process each conditioning image(s) input separately
-        images_results = defaultdict(list)
-        for img in images:
-            image_encode_kwargs = filter_kwargs(self.encode_image, **kwargs)
-            image_encode_kwargs.update({
-                'images': img,
-                'device': device,
-            })
-            img_result = self.encode_image(**image_encode_kwargs)
-            for k, v in img_result.items():
-                images_results[k].append(v)
-
-        # 3. Combine results
-        return {**prompt_results, **images_results}
-
 
     def decode_latents(self, latents: torch.Tensor, output_type: Literal['pt', 'pil', 'np'] = 'pil', **kwargs) -> torch.Tensor:
         """Decode the latents using the VAE decoder."""
@@ -365,10 +341,14 @@ class Wan2_I2V_Adapter(BaseAdapter):
         guidance_scale_2: Optional[float] = None,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         # Encoded Prompt
+        prompt_ids: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
+        # Encoded Negative Prompt
+        negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         # Encoded Image
         image_embeds: Optional[torch.Tensor] = None,
+        condition_images: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None,
         last_image: Optional[torch.Tensor] = None, # Not supported yet
         # Other args
         compute_log_prob: bool = False,
@@ -389,7 +369,7 @@ class Wan2_I2V_Adapter(BaseAdapter):
             num_frames = num_frames // self.pipeline.vae_scale_factor_temporal * self.pipeline.vae_scale_factor_temporal + 1
         num_frames = max(num_frames, 1)
 
-        images = self._standardize_image_input(images, output_type='pt')
+        images = self._standardize_image_input(images, output_type='pil')
 
         # 2. Encode prompt
         if prompt_embeds is None or negative_prompt_embeds is None:
@@ -427,7 +407,7 @@ class Wan2_I2V_Adapter(BaseAdapter):
                 image_embeds = image_encoded['image_embeds']
                 # condition_images = image_encoded['condition_images']
 
-            image_embeds = image_embeds.to(transformer_dtype)
+        image_embeds = image_embeds.to(device=device, dtype=transformer_dtype) if image_embeds is not None else None
 
         # 5. Prepare latent variables
         num_channels_latents = self.pipeline.vae.config.z_dim
@@ -452,7 +432,7 @@ class Wan2_I2V_Adapter(BaseAdapter):
             latents=None,
             last_image=last_image,
         )
-        if self.config.expand_timesteps:
+        if self.pipeline.config.expand_timesteps:
             # wan 2.2 5b i2v use firt_frame_mask to mask timesteps
             latents, condition, first_frame_mask = latents_outputs
         else:
@@ -586,8 +566,8 @@ class Wan2_I2V_Adapter(BaseAdapter):
 
                 # Prompt info
                 prompt=prompt[b] if isinstance(prompt, list) else prompt,
-                prompt_ids=prompt_ids[b],
-                prompt_embeds=prompt_embeds[b],
+                prompt_ids=prompt_ids[b] if prompt_ids is not None else None,
+                prompt_embeds=prompt_embeds[b] if prompt_embeds is not None else None,
 
                 # Negative prompt info
                 negative_prompt=negative_prompt[b] if isinstance(negative_prompt, list) else negative_prompt,

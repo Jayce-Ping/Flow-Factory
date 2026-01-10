@@ -1405,7 +1405,7 @@ class BaseAdapter(ABC):
             elif comp == 'transformers':
                 self.off_load_transformers()
             else:
-                component = getattr(self, comp, None)
+                component = self.get_component(comp)
                 if component is not None and hasattr(component, 'to'):
                     component.to('cpu')
                     logger.info(f"Off-loaded {comp} to CPU")
@@ -1431,7 +1431,7 @@ class BaseAdapter(ABC):
             elif comp == 'transformers':
                 self.on_load_transformers(device)
             else:
-                component = getattr(self, comp, None)
+                component = self.get_component(comp)
                 if component is not None and hasattr(component, 'to'):
                     component.to(device)
                     logger.info(f"Loaded {comp} to {device}")
@@ -1513,6 +1513,7 @@ class BaseAdapter(ABC):
             (videos, self.encode_video),
         ]:
             if input is not None:
+                logger.info(f"Preprocessing input for {encoder_method.__name__}...")
                 results.update(
                     encoder_method(
                         input,

@@ -26,7 +26,11 @@ from ...utils.base import (
     tensor_list_to_pil_image,
     numpy_list_to_pil_image,
     numpy_to_pil_image,
-    pil_image_to_tensor
+    pil_image_to_tensor,
+    is_valid_image,
+    is_valid_image_batch,
+    is_valid_image_list,
+    is_valid_image_batch_list,
 )
 from ...utils.logger_utils import setup_logger
 
@@ -106,6 +110,7 @@ class Flux1KontextAdapter(BaseAdapter):
     
     def __init__(self, config: Arguments, accelerator : Accelerator):
         super().__init__(config, accelerator)
+        self._has_warned_multi_image = False
     
     def load_pipeline(self) -> FluxKontextPipeline:
         return FluxKontextPipeline.from_pretrained(
@@ -174,9 +179,10 @@ class Flux1KontextAdapter(BaseAdapter):
         """
         if isinstance(images, Image.Image):
             images = [images]
-        elif isinstance(images, list) and all(isinstance(batch, list) for batch in images):
+        elif is_valid_image_batch_list(images):
             # A list of list of images
-            if any(len(batch) > 1 for batch in images):
+            if any(len(batch) > 1 for batch in images) and not self._has_warned_multi_image:
+                self._has_warned_multi_image = True
                 logger.warning(
                     "Multiple condition images are not supported for Flux1-Kontext-dev. Only the first image of each batch will be used."
                 )
@@ -247,16 +253,13 @@ class Flux1KontextAdapter(BaseAdapter):
         """
         device = self.pipeline.vae.device
         dtype = self.pipeline.vae.dtype
-        if isinstance(images, Image.Image):
-            images = [images]
-        elif isinstance(images, list) and all(isinstance(batch, list) for batch in images):
-            # A list of list of images
-            if any(len(batch) > 1 for batch in images):
-                logger.warning(
-                    "Multiple condition images are not supported for Flux1-Kontext-dev. Only the first image of each batch will be used."
-                )
-            
-            images = [batch[0] for batch in images]
+        images = self._standardize_image_input(
+            images,
+            output_type='pil',
+        )
+        
+        if not is_valid_image_batch(images):
+            raise ValueError(f"Invalid image input type: {type(images)}. Must be a PIL Image, numpy array, torch tensor, or a list of these types.")
 
         batch_size = len(images)
         num_channels_latents = self.pipeline.transformer.config.in_channels // 4

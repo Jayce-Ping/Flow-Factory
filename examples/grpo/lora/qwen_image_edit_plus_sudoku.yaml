@@ -1,7 +1,7 @@
 # Environment Configuration
 launcher: "accelerate"  # Options: accelerate
 config_file: config/deepspeed/deepspeed_zero2.yaml  # Use FSDP2 to shard the model as well. Switch to config/deepspeed/deepspeed_zero2.yaml if you have enough GPU memory.
-num_processes: 6  # Number of processes to launch (overrides config file)
+num_processes: 8  # Number of processes to launch (overrides config file)
 main_process_port: 29500
 mixed_precision: "bf16"  # Options: no, fp16, bf16
 
@@ -32,7 +32,7 @@ model:
 
 log:
   save_dir: "~/jcy/Flow-Factory"  # Directory to save model checkpoints and logs
-  save_freq: 20  # Save frequency in epochs (0 to disable)
+  save_freq: 0  # Save frequency in epochs (0 to disable)
   save_model_only: true  # Save only the model weights (not optimizer, scheduler, etc.)
 
 # Training Configuration
@@ -42,7 +42,7 @@ train:
   enable_gradient_checkpointing: false  # Enable gradient checkpointing to save memory with extra compute
 
   # Image settings
-  resolution: 384  # Can be int or [height, width]
+  resolution: 512  # Can be int or [height, width]
   auto_resize: true # Enable auto-resize to fit the condition images' aspect ratio during inference
   condition_image_size: [512, 512]  # Max condition image resolution, int or [height, width]
   
@@ -88,7 +88,7 @@ eval:
   condition_image_size: 512  # Max condition image resolution, int or [height, width]
   auto_resize: true # Enable auto-resize to fit the condition images' aspect ratio during inference
   guidance_scale: 4  # Guidance scale for sampling
-  num_inference_steps: 40  # Number of eval timesteps
+  num_inference_steps: 28  # Number of eval timesteps
   per_device_batch_size: 1  # Eval batch size
   seed: 42  # Eval seed
   eval_freq: 20  # Eval frequency in epochs (0 to disable)
