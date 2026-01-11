@@ -51,7 +51,7 @@ train:
 
   # Video settings
   resolution: 256  # Can be int or [height, width]
-  num_frames: 41 # (F - 1) mod 4 == 0
+  num_frames: 21 # (F - 1) mod 4 == 0
   
   # Batch and sampling
   per_device_batch_size: 1  # Batch size per device

@@ -3,7 +3,7 @@ import os
 import re
 import json
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, List, Union, Literal, Iterable
+from typing import Dict, Any, Optional, Tuple, List, Union, Literal, Iterable, Set
 from dataclasses import dataclass, field, asdict, fields
 from contextlib import contextmanager, nullcontext, ExitStack
 import logging
@@ -334,6 +334,30 @@ class BaseAdapter(ABC):
         """Modules taht are requires for inference and forward"""
         return ['transformer', 'vae']
 
+    def _merge_module_pattern(
+        self,
+        current_pattern: Union[str, List[str], Set[str]],
+        new_pattern: str
+    ) -> Union[str, Set[str]]:
+        """
+        Resolve pattern and merge into current modules.
+        
+        Args:
+            current: Current state ('all' or list of modules)
+            pattern: New pattern to merge ('all', 'default', or module name)
+        
+        Returns:
+            'all' or updated module list
+        """
+        # 'all' is absorbing - once set, stays 'all'
+        if current_pattern == 'all' or new_pattern == 'all':
+            return 'all'
+        
+        # Resolve pattern to module list
+        new_modules = self.default_target_modules if new_pattern == 'default' else [new_pattern]
+        new_pattern_set = set(current_pattern) | set(new_modules)
+        return new_pattern_set
+
     def _parse_target_modules(
         self,
         target_modules: Union[str, List[str]],
@@ -362,37 +386,22 @@ class BaseAdapter(ABC):
         # Normalize components to list
         if isinstance(components, str):
             components = [components]
-
-        # Normalize target_modules
-        if target_modules == 'default':
-            base_modules = self.default_target_modules
-        elif target_modules == 'all':
-            # Return 'all' for each component
-            return {comp: 'all' for comp in components}
-        elif isinstance(target_modules, str):
-            base_modules = [target_modules]
-        else:
-            base_modules = target_modules
+        if isinstance(target_modules, str):
+            target_modules = [target_modules]
         
-        # Initialize component map
-        component_map = {comp: [] for comp in components}
+        component_map = {comp: set() for comp in components}
         
-        # Parse each module pattern
-        for module in base_modules:
-            # Split only on first dot to check for component prefix
+        for module in target_modules:
             parts = module.split('.', 1)
-            
             if len(parts) == 2 and parts[0] in components:
-                # Component-specific: 'transformer.attn.to_q' -> transformer: ['attn.to_q']
-                component_map[parts[0]].append(parts[1])
+                component_map[parts[0]] = self._merge_module_pattern(component_map[parts[0]], parts[1])
             else:
-                # Shared: 'attn.to_q' -> apply to all components
                 for comp in components:
-                    component_map[comp].append(module)
-        
+                    component_map[comp] = self._merge_module_pattern(component_map[comp], module)
+
         # Remove duplicates and handle empty lists
         component_map = {
-            comp: sorted(list(set(mods))) if mods else None
+            comp: ('all' if mods == 'all' else sorted(mods) if mods else None) # Keep None here, to enable `accelerator.prepare` for non-trainable module to save mem.
             for comp, mods in component_map.items()
         }
         
@@ -589,6 +598,10 @@ class BaseAdapter(ABC):
             
             logger.info(f"Applied LoRA to {comp} with modules: {modules}")
         
+        if not results:
+            logger.warning("No LoRA adapters were applied")
+            return {}
+
         return results[components[0]] if len(results) == 1 else results
 
     # ============================== Distributed Utils ==================================

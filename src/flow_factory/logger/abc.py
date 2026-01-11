@@ -11,8 +11,8 @@ class Logger(ABC):
 
     def __init__(self, config: Arguments):
         self.config = config
-        self.clean_up_freq = 5
-        self._clean_cnt = 0
+        self.clean_up_freq = 10
+        self._pending_cleanup: List[Dict] = []
         self._init_platform()
 
     @abstractmethod
@@ -47,9 +47,11 @@ class Logger(ABC):
             self._log_impl(final_dict, step)
             
         # 5. Cleanup temporary files periodically
-        self._clean_cnt = (self._clean_cnt + 1) % self.clean_up_freq
-        if self._clean_cnt == 0:
-            self._cleanup_temp_files(formatted_dict)
+        self._pending_cleanup.append(formatted_dict)
+        if len(self._pending_cleanup) >= self.clean_up_freq:
+            for d in self._pending_cleanup:
+                self._cleanup_temp_files(d)
+            self._pending_cleanup.clear()
 
     def _recursive_convert(self, value: Any) -> Any:
         """Helper to handle lists recursively."""
