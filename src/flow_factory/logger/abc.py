@@ -47,11 +47,10 @@ class Logger(ABC):
             self._log_impl(final_dict, step)
             
         # 5. Cleanup temporary files periodically
-        self._pending_cleanup.append(formatted_dict)
         if len(self._pending_cleanup) >= self.clean_up_freq:
-            for d in self._pending_cleanup:
-                self._cleanup_temp_files(d)
-            self._pending_cleanup.clear()
+            first_data = self._pending_cleanup.pop(0)
+            self._cleanup_temp_files(first_data)
+        self._pending_cleanup.append(formatted_dict)
 
     def _recursive_convert(self, value: Any) -> Any:
         """Helper to handle lists recursively."""
