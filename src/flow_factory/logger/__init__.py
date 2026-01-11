@@ -10,7 +10,7 @@ Supported backends:
 - SwanLab
 """
 
-from .abc import Logger, LogImage, LogVideo
+from .abc import Logger, LogImage, LogVideo, LogTable
 from .registry import (
     get_logger_class,
     list_registered_loggers,
@@ -22,6 +22,7 @@ __all__ = [
     "Logger",
     "LogImage",
     "LogVideo",
+    "LogTable",
     
     # Registry functions
     "get_logger_class",
