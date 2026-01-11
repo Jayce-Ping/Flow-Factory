@@ -1067,11 +1067,15 @@ class BaseAdapter(ABC):
         save_context = self.use_ema_parameters if save_ema else nullcontext
         
         with save_context():
-            for comp_name in self.target_module_map.keys():
+            for comp_name, target_modules in self.target_module_map.items():
                 if not hasattr(self, comp_name):
                     logger.warning(f"Component {comp_name} not found, skipping save")
                     continue
                 
+                if not target_modules:
+                    logger.info(f"No target modules applied to {comp_name}, skip saving")
+                    continue
+
                 component = getattr(self, comp_name)
                 
                 # Determine save path

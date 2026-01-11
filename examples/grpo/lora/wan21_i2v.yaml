@@ -11,7 +11,7 @@ main_process_port: 29500
 mixed_precision: "bf16"  # Options: no, fp16, bf16
 
 run_name: null  # Run name (auto: {model_type}_{finetune_type}_{timestamp})
-project: "Flow-Wan"  # Project name for logging
+project: "Flow-Factory-I2V"  # Project name for logging
 logging_backend: "wandb"  # Options: wandb, swanlab, none
 
 # Data Configuration
@@ -29,10 +29,8 @@ model:
   finetune_type: 'lora' # Options: full, lora
   lora_rank : 64
   lora_alpha : 128
-  target_components: 'transformer' # Options: transformer, transformer_2, or ['transformer', 'transformer_2']
-  # Options: all, default, or list of module names like ["to_k", "to_q", "to_v", "to_out.0"],
-  # for Wan2.2, you can specify something like ['transformer.to_k', 'transformer_2.to_q'] to train different modules for different components.
-  target_modules: "default"
+  target_components: 'transformer' # Options: transformer
+  target_modules: "default" # Options: all, default, or list of module names like ["to_k", "to_q", "to_v", "to_out.0"]
   model_name_or_path: "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"  # Wan-AI/Wan2.1-I2V-14B-480P-Diffusers / Wan-AI/Wan2.1-I2V-14B-720P-Diffusers
   model_type: "wan2_i2v"  # wan2_t2v, wan2_i2v, wan2_v2v
   resume_path: null # Path to load previous checkpoint/lora adapter
@@ -51,7 +49,7 @@ train:
 
   # Video settings
   resolution: 240  # Can be int or [height, width]
-  num_frames: 1 # (F - 1) mod 4 == 0
+  num_frames: 5 # (F - 1) mod 4 == 0
   
   # Batch and sampling
   per_device_batch_size: 1  # Batch size per device
@@ -87,7 +85,7 @@ train:
 # Evaluation settings
 eval:
   resolution: 480  # Evaluation resolution
-  num_frames: 1 # Evaluation frames
+  num_frames: 5 # Evaluation frames
   per_device_batch_size: 1  # Eval batch size
   seed: 42  # Eval seed (defaults to training seed)
   guidance_scale: 5.0  # Guidance scale for sampling
