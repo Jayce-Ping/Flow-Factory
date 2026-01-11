@@ -1,7 +1,7 @@
-<h1 align="center">
-  <img src="./assets/logo.png" alt="logo" height="100" style="vertical-align: middle;">
-  Flow-Factory
-</h1>
+<p align="center">
+  <img src="./assets/logo.png" alt="logo" height="100">
+</p>
+<h1 align="center">Flow-Factory</h1>
 
 <!-- <p align="center">
   <img src="./assets/logo.png" alt="Flow-Factory Logo" width="200">
