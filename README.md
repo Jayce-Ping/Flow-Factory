@@ -142,6 +142,15 @@ Each line represents a single text prompt. Alternatively, you can use `train.jso
 
 > Example: [dataset/t2is](./dataset/t2is/train.jsonl)
 
+`negative_prompt` is also supported:
+
+```jsonl
+{"prompt": "A hill in a sunset.", "negative_prompt": "low quality, blurry, distorted, poorly drawn"}
+{"prompt": "An astronaut riding a horse on Mars.", "negative_prompt": "low quality, blurry, distorted, poorly drawn"}
+```
+
+> Example: [dataset/t2is_neg](./dataset/t2is_neg/train.jsonl)
+
 ## Image-to-Image & Image-to-Video
 
 For tasks involving conditioning images, use `train.jsonl` and `test.jsonl` in the following format:
@@ -172,8 +181,8 @@ For models like [FLUX.2-dev]((https://huggingface.co/black-forest-labs/FLUX.2-de
 ## Video-to-Video
 
 ```jsonl
-{"prompt": "A hill in a sunset.", "video": "path/to/video1.png"}
-{"prompt": "An astronaut riding a horse on Mars.", "videos": ["path/to/video2.png", "path/to/video3.png"]}
+{"prompt": "A hill in a sunset.", "video": "path/to/video1.mp4"}
+{"prompt": "An astronaut riding a horse on Mars.", "videos": ["path/to/video2.mp4", "path/to/video3.mp4"]}
 ```
 
 # 💯 Reward Model
