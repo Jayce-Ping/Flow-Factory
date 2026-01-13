@@ -33,6 +33,7 @@ class SudokuRewardModel(BaseRewardModel):
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
                 use_angle_cls=False,
+                show_log=False,
             )
 
     def _to_pil(self, img: Union[Image.Image, torch.Tensor, np.ndarray, List]) -> List[Image.Image]:
@@ -93,7 +94,7 @@ class SudokuRewardModel(BaseRewardModel):
         
         return [''.join(all_digits[i * 81 : (i + 1) * 81]) for i in range(len(images))]
 
-    def _ocr_grids_paddle(self, images: List[Image.Image]) -> List[str]:
+    def _ocr_grids_paddle_together(self, images: List[Image.Image]) -> List[str]:
         """OCR using PaddleOCR - process full grid and map by coordinates."""
         if not images:
             return []
@@ -120,10 +121,34 @@ class SudokuRewardModel(BaseRewardModel):
                     col, row = int(cx // cw), int(cy // ch)
                     if 0 <= row < 9 and 0 <= col < 9:
                         digit = next((c for c in text if c.isdigit()), None)
-                        if digit:
+                        if digit and grid[row][col] == '0':  # First-write wins
                             grid[row][col] = digit
             
             results.append(''.join(''.join(row) for row in grid))
+        return results
+
+    def _ocr_grids_paddle(self, images: List[Image.Image]) -> List[str]:
+        """OCR using PaddleOCR - split into cells first, then detect each."""
+        if not images:
+            return []
+        
+        results = []
+        for img in images:
+            cells = self._split_grid(img)  # Split into 81 cells first
+            digits = []
+            for cell in cells:
+                cell_np = np.array(cell.convert('RGB'))
+                ocr_result = self.ocr.ocr(cell_np, cls=False)
+                digit = '0'
+                if ocr_result and ocr_result[0]:
+                    for item in ocr_result[0]:
+                        text = item[1][0]
+                        found = next((c for c in text if c.isdigit()), None)
+                        if found:
+                            digit = found
+                            break
+                digits.append(digit)
+            results.append(''.join(digits))
         return results
 
     def _ocr_grids(self, images: List[Image.Image]) -> List[str]:
