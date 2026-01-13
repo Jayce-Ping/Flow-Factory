@@ -72,7 +72,7 @@ class SudokuRewardModel(BaseRewardModel):
                 do_sample=False,
                 tokenizer=self.processor.tokenizer,
                 stop_strings="<|im_end|>",
-                max_new_tokens=4,  # Each cell has at most 1 digit
+                max_new_tokens=1,  # Each cell has at most 1 digit
             )
             texts = self.processor.batch_decode(
                 generate_ids[:, inputs["input_ids"].shape[1] :],
