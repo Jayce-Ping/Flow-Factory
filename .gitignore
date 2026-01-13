@@ -1,6 +1,8 @@
 logs/
 swanlog/
 wandb/
+runs/
+tensorboard/
 *out
 *.log
 *.err

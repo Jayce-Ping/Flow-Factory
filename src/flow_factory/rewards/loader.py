@@ -159,7 +159,7 @@ class MultiRewardLoader:
                 # Reuse existing model
                 handle = self._cache[identity_key]
                 handle.names.append(f"{config.name}({source})")
-                logger.info(f"Reusing '{handle.config.name}' for '{config.name}' ({source})")
+                # logger.info(f"Reusing '{handle.config.name}' for '{config.name}' ({source})")
             else:
                 # Load new model
                 model = load_reward_model(config, self.accelerator)
@@ -169,7 +169,7 @@ class MultiRewardLoader:
                     names=[f"{config.name}({source})"]
                 )
                 self._cache[identity_key] = handle
-                logger.info(f"Loaded reward model: {config.name} ({config.reward_model}) for {source}")
+                # logger.info(f"Loaded reward model: {config.name} ({config.reward_model}) for {source}")
             
             name_to_key[config.name] = identity_key
         
@@ -178,7 +178,7 @@ class MultiRewardLoader:
             self._eval_name_to_key = self._training_name_to_key.copy()
         
         self._loaded = True
-        logger.info(self.summary())
+        # logger.info(self.summary())
         return self
     
     def get_rewards_models(self, split : Literal['train', 'eval']) -> Dict[str, BaseRewardModel]:

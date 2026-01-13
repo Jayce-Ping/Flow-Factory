@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 _LOGGER_REGISTRY = {
     'wandb': 'flow_factory.logger.wandb.WandbLogger',
     'swanlab': 'flow_factory.logger.swanlab.SwanlabLogger',
+    'tensorboard': 'flow_factory.logger.tensorboard.TensorboardLogger',
     'none': None,
 }
 
