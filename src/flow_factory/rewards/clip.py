@@ -35,7 +35,6 @@ class CLIPRewardModel(BaseRewardModel):
         prompt: List[str],
         image: Optional[List[Image.Image]] = None,
         video: Optional[List[List[Image.Image]]] = None,
-        **kwargs,
     ) -> RewardModelOutput:
         """
         Compute CLIP similarity rewards for given prompts and images.

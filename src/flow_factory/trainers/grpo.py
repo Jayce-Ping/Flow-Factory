@@ -130,6 +130,7 @@ class GRPOTrainer(BaseTrainer):
             rewards = []
             
             filtered_key_fields = filter_kwargs(reward_model.__call__, **samples[0])
+            stackable_keys = None
             
             for i in tqdm(
                 range(0, len(samples), reward_model.config.batch_size),
@@ -140,11 +141,18 @@ class GRPOTrainer(BaseTrainer):
                     {key: getattr(sample, key) for key in filtered_key_fields}
                     for sample in samples[i:i + reward_model.config.batch_size]
                 ]
+
+                # Detect stackable keys on first batch
+                if stackable_keys is None:
+                    stackable_keys = {
+                        key for key in filtered_key_fields
+                        if isinstance(batch_samples[0][key], torch.Tensor)
+                        and all(s[key].shape == batch_samples[0][key].shape for s in batch_samples)
+                    }
                 
                 batch_samples = {
-                    key: (torch.stack([sample[key] for sample in batch_samples], dim=0)
-                        if isinstance(batch_samples[0][key], torch.Tensor)
-                        else [sample[key] for sample in batch_samples])
+                    key: torch.stack([sample[key] for sample in batch_samples], dim=0) if key in stackable_keys
+                    else [sample[key] for sample in batch_samples]
                     for key in filtered_key_fields
                 }
                 
