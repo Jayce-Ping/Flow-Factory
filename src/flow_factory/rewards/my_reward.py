@@ -29,7 +29,6 @@ class MyRewardModel(BaseRewardModel):
         video : Optional[List[List[Image.Image]]] = None,
         condition_images: Optional[List[Union[List[Image.Image], torch.Tensor]]] = None,
         condition_videos: Optional[List[Union[List[List[Image.Image]], torch.Tensor]]] = None,
-        **kwargs,
     ) -> RewardModelOutput:
         """
         Compute rewards for given prompts and images.
@@ -39,6 +38,9 @@ class MyRewardModel(BaseRewardModel):
             video (list[list[Image.Image]]): List of generated videos (each video is a list of frames) corresponding to the prompts.
             condition_images (Optional[List[List[Image.Image] | torch.Tensor]]): Optional list of condition images
                 - each element is a list of images. If only one condition image per prompt, this will be a list of single-element lists.
+                - each element is a tensor with batch dimension, scaled in [0, 1].
+            condition_videos (Optional[List[List[List[Image.Image]]] | torch.Tensor]): Optional list of condition videos
+                - each element is a list of videos, where each video is a list of frames. If only one condition video per prompt, this will be a list of single-element lists.
                 - each element is a tensor with batch dimension, scaled in [0, 1].
         Returns:
             RewardModelOutput: Contains rewards tensor and any extra information.

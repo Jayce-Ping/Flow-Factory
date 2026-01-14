@@ -65,11 +65,13 @@ class CustomRewardModel(BaseRewardModel):
     @torch.no_grad()
     def __call__(
         self,
-        prompt: list[str],
-        image: Optional[list[Image.Image]] = None,
-        video: Optional[list[list[Image.Image]]] = None,
-        **kwargs,
+        prompt : List[str], # A batch of prompts
+        image : Optional[List[Image.Image]] = None, # A batch of generated images, if there are.
+        video : Optional[List[List[Image.Image]]] = None, # A batch of generated videos, if there are.
+        condition_images: Optional[List[Union[List[Image.Image], torch.Tensor]]] = None, # A batch of condition image lists
+        condition_videos: Optional[List[Union[List[List[Image.Image]], torch.Tensor]]] = None, # A batch of condition video lists
     ) -> RewardModelOutput:
+        # Implement your own reward computation here.
         rewards = torch.randn(len(prompt), device=self.device)
         return RewardModelOutput(rewards=rewards)
 ```
@@ -81,24 +83,6 @@ rewards:
   - name: "custom"
     reward_model: "flow_factory.rewards.CustomRewardModel"  # Full Python path
     batch_size: 16
-```
-
-Alternatively, register with decorator:
-
-```python
-from flow_factory.rewards import register_reward_model
-
-@register_reward_model('MyReward')
-class CustomRewardModel(BaseRewardModel):
-    ...
-```
-
-Then use:
-
-```yaml
-rewards:
-  - name: "custom"
-    reward_model: "MyReward"  # Registered name
 ```
 
 ## Multi-Reward Training
