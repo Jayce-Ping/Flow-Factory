@@ -6,10 +6,10 @@ from PIL import Image
 from contextlib import nullcontext
 import torch
 
-from .abc import BaseRewardModel, RewardModelOutput
+from .abc import PointwiseRewardModel, GroupwiseRewardModel, RewardModelOutput
 from ..hparams import *
 
-class MyRewardModel(BaseRewardModel):
+class MyRewardModel(PointwiseRewardModel):
     def __init__(self, config: RewardArguments, accelerator: Accelerator):
         super().__init__(config, accelerator)
         # `super().__init__` gives you:

@@ -6,11 +6,12 @@ from PIL import Image
 from contextlib import nullcontext
 import torch
 
-from .abc import BaseRewardModel, RewardModelOutput
+from .abc import PointwiseRewardModel, GroupwiseRewardModel, RewardModelOutput
 from ..hparams import *
 
 
-class PickScoreRewardModel(BaseRewardModel):
+class PickScoreRewardModel(PointwiseRewardModel):
+    required_fields = ("prompt", "image", "video")
     def __init__(self, config: RewardArguments, accelerator: Accelerator):
         super().__init__(config, accelerator)
         processor_path = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K"

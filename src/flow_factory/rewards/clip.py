@@ -7,11 +7,11 @@ import torch
 import torch.nn.functional as F
 from transformers import CLIPProcessor, CLIPModel
 
-from .abc import BaseRewardModel, RewardModelOutput
+from .abc import PointwiseRewardModel, RewardModelOutput
 from ..hparams import RewardArguments
 
 
-class CLIPRewardModel(BaseRewardModel):
+class CLIPRewardModel(PointwiseRewardModel):
     """
     CLIP-based reward model that computes image-text similarity.
     """

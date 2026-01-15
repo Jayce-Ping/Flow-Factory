@@ -12,6 +12,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
+from ..utils.base import (
+    standardize_image_batch,
+    standardize_video_batch,
+)
+
 from diffusers.utils.import_utils import is_torch_available, is_torch_version
 
 from ..utils.base import (
@@ -22,7 +27,10 @@ from ..utils.base import (
     hash_pil_image,
     hash_tensor,
     hash_pil_image_list,
-    is_tensor_list
+    is_tensor_list,
+    tensor_list_to_pil_image,
+    standardize_image_batch,
+    standardize_video_batch,
 )
 from ..utils.logger_utils import setup_logger
 
@@ -54,8 +62,8 @@ class BaseSample:
     height : Optional[int] = None
     width : Optional[int] = None
     # Generated media
-    image: Optional[ImageSingle] = None # PIL.Image | torch.Tensor | np.ndarray
-    video: Optional[Video] = None # List[Image.Image] | torch.Tensor | np.ndarray
+    image: Optional[ImageSingle] = None # PIL.Image | torch.Tensor | np.ndarray. This field will be convert to a tensor of shape (C, H, W) for canonicalization.
+    video: Optional[Video] = None # List[Image.Image] | torch.Tensor | np.ndarray. This field will be convert to a tensor of shape (T, C, H, W) for canonicalization.
     # Prompt information
     prompt : Optional[str] = None
     prompt_ids : Optional[torch.Tensor] = None
@@ -69,7 +77,10 @@ class BaseSample:
     _unique_id: Optional[int] = field(default=None, repr=False, compare=False)
 
     def __init_subclass__(cls) -> None:
-        """Register subclasses as PyTorch pytree nodes for DDP/FSDP compatibility."""
+        """
+        **Copied from diffusers.utils.outputs.BaseOutput.__init_subclass__**
+        Register subclasses as PyTorch pytree nodes for DDP/FSDP compatibility.
+        """
         super().__init_subclass__()
         if is_torch_available():
             import torch.utils._pytree as pytree
@@ -96,6 +107,18 @@ class BaseSample:
                     unflatten,
                     serialized_type_name=f"{cls.__module__}.{cls.__name__}"
                 )
+
+    def __post_init__(self):
+        """Post-initialization processing."""
+        # Standardize image field to tensor (C, H, W)
+        if self.image is not None:
+            # -> (1, C, H, W) -> (C, H, W)
+            self.image = standardize_image_batch(self.image, 'pt')[0]
+        
+        # Standardize video field to tensor (T, C, H, W)
+        if self.video is not None:
+            # -> (1, T, C, H, W) -> (T, C, H, W)
+            self.video = standardize_video_batch(self.video, 'pt')[0]
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for memory tracking, excluding non-tensor fields."""
@@ -142,6 +165,25 @@ class BaseSample:
             object.__setattr__(self, '_unique_id', None) # Reset unique_id cache
 
         super().__setattr__(key, value)
+
+    def keys(self) -> Iterable[str]:
+        """Return the union of dataclass fields and extra_kwargs keys."""
+        # Get standard dataclass field names
+        field_names = {f.name for f in fields(self)}
+        # Get keys from extra_kwargs
+        extra_keys = self.extra_kwargs.keys()
+        return field_names | extra_keys
+
+    def __getitem__(self, key: str) -> Any:
+        """Allow dict-like access: sample['prompt']."""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(f"Key '{key}' not found in {self.__class__.__name__}")
+
+    def __iter__(self):
+        """Allow iteration over keys (required for some mapping operations)."""
+        return iter(self.keys())
 
     def short_rep(self) -> Dict[str, Any]:
         """Short representation for logging (replaces large tensors with shapes)."""
@@ -207,6 +249,14 @@ class ImageConditionSample(BaseSample):
     _id_fields : ClassVar[frozenset[str]] = BaseSample._id_fields | frozenset({'condition_images'})
 
     condition_images : Optional[ImageBatch] = None # A list of (Image.Image | torch.Tensor | np.ndarray) or a batched tensor/array
+    # `condition_images` will be convert to a list of tensors of shape (C, H, W) for canonicalization.
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.condition_images is not None:
+            # Standardize condition_images to List[torch.Tensor] of shape (C, H, W),
+            # if the input `condition_images` is already a batched tensor/array, it will stay as a batched tensor.
+            self.condition_images = standardize_image_batch(self.condition_images, 'pt')
 
     def compute_unique_id(self) -> int:
         """Hash prompt + condition_images."""
@@ -240,6 +290,14 @@ class VideoConditionSample(BaseSample):
     _id_fields : ClassVar[frozenset[str]] = BaseSample._id_fields | frozenset({'condition_videos'})
 
     condition_videos: Optional[VideoBatch] = None # A list of (List[Image.Image] | torch.Tensor | np.ndarray) or a batched tensor/array
+    # `condition_videos` will be convert to a list of tensors of shape (T, C, H, W) for canonicalization.
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.condition_videos is not None:
+            # Standardize condition_videos to List[torch.Tensor] of shape (T, C, H, W),
+            # if the input `condition_videos` is already a batched tensor/array, it will stay as a batched tensor.
+            self.condition_videos = standardize_video_batch(self.condition_videos, 'pt')
 
     def compute_unique_id(self) -> int:
         """Hash prompt + condition_videos (sampling 4 evenly spaced frames)."""
