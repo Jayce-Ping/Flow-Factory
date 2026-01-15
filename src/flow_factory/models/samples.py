@@ -22,7 +22,10 @@ from ..utils.base import (
     hash_pil_image,
     hash_tensor,
     hash_pil_image_list,
-    is_tensor_list
+    hash_tensor_list,
+    is_tensor_list,
+    standardize_image_batch,
+    standardize_video_batch,
 )
 from ..utils.logger_utils import setup_logger
 
@@ -143,6 +146,18 @@ class BaseSample:
 
         super().__setattr__(key, value)
 
+    def keys(self):
+        return self.to_dict().keys() # Keep consistent
+
+    def __iter__(self):
+        return iter(self.keys())
+    
+    def __getitem__(self, key):
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
     def short_rep(self) -> Dict[str, Any]:
         """Short representation for logging (replaces large tensors with shapes)."""
         def tensor_to_repr(v):
@@ -220,17 +235,14 @@ class ImageConditionSample(BaseSample):
         
         # 2. Hash condition_images
         if self.condition_images is not None:
-            if isinstance(self.condition_images, Image.Image):
-                hasher.update(hash_pil_image(self.condition_images, size=32).encode())
-            elif isinstance(self.condition_images, list) and self.condition_images:
-                # List[Image.Image]
-                if isinstance(self.condition_images[0], Image.Image):
-                    hasher.update(hash_pil_image_list(self.condition_images, size=32).encode())
-            elif isinstance(self.condition_images, (torch.Tensor, np.ndarray)):
-                tensor = self.condition_images
-                if isinstance(tensor, np.ndarray):
-                    tensor = torch.from_numpy(tensor)
-                hasher.update(hash_tensor(tensor).encode())
+            cond_images = standardize_image_batch(
+                self.condition_images,
+                output_type='pt'
+            )
+            if isinstance(cond_images, list):
+                hasher.update(hash_tensor_list(cond_images).encode())
+            else:
+                hasher.update(hash_tensor(cond_images).encode())
         
         return int.from_bytes(hasher.digest()[:8], byteorder='big', signed=True)
 
@@ -253,27 +265,14 @@ class VideoConditionSample(BaseSample):
         
         # 2. Hash condition_videos
         if self.condition_videos is not None:
-            if isinstance(self.condition_videos, (torch.Tensor, np.ndarray)):
-                tensor = self.condition_videos
-                if isinstance(tensor, np.ndarray):
-                    tensor = torch.from_numpy(tensor)
-                hasher.update(hash_tensor(tensor).encode())
-            elif isinstance(self.condition_videos, list) and self.condition_videos:
-                # List[Image.Image] (single video) or List[List[Image.Image]] (multi video)
-                frames = self.condition_videos
-                # Flatten if nested list
-                if isinstance(frames[0], list):
-                    frames = [f for video in frames for f in video]
-                
-                # Sample 4 evenly spaced frames
-                if frames and isinstance(frames[0], Image.Image):
-                    n = len(frames)
-                    if n >= 4:
-                        indices = [i * (n - 1) // 3 for i in range(4)]
-                    else:
-                        indices = list(range(n))
-                    sampled = [frames[i] for i in indices]
-                    hasher.update(hash_pil_image_list(sampled, size=32).encode())
+            cond_videos = standardize_video_batch(
+                self.condition_videos,
+                output_type='pt'
+            )
+            if isinstance(cond_videos, list):
+                hasher.update(hash_tensor_list(cond_videos).encode())
+            else:
+                hasher.update(hash_tensor(cond_videos).encode())
         
         return int.from_bytes(hasher.digest()[:8], byteorder='big', signed=True)
 

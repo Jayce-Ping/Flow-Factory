@@ -155,6 +155,10 @@ class GRPOTrainer(BaseTrainer):
                     else [sample[key] for sample in batch_samples]
                     for key in filtered_key_fields
                 }
+                batch_samples = {
+                    k: v for k, v in batch_samples.items()
+                    if all(x is not None for x in v)
+                }
                 
                 reward_output = reward_model(**batch_samples)
                 reward_tensor = torch.as_tensor(
