@@ -1,3 +1,17 @@
+# Copyright 2026 Jayce-Ping
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # src/flow_factory/rewards/registry.py
 """
 Reward Model Registry System
@@ -5,15 +19,18 @@ Centralized registry for reward models with dynamic loading.
 """
 from typing import Type, Dict
 import importlib
-import logging
+from ..utils.logger_utils import setup_logger
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
+
 
 # Reward Model Registry Storage
 _REWARD_MODEL_REGISTRY: Dict[str, str] = {
     'pickscore': 'flow_factory.rewards.pick_score.PickScoreRewardModel',
+    'clip': 'flow_factory.rewards.clip.CLIPRewardModel',
+    'consistent_editing': 'flow_factory.rewards.consistent_editing.ConsistentEditingRewardModel'
 }
+_REWARD_MODEL_REGISTRY = {k.lower(): v for k, v in _REWARD_MODEL_REGISTRY.items()}
 
 
 def register_reward_model(name: str):

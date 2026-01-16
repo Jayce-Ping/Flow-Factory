@@ -1,33 +1,55 @@
+# Copyright 2026 Jayce-Ping
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # src/flow_factory/models/flux/flux1.py
 from __future__ import annotations
 
 import os
 from typing import Union, List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
-import torch
-from diffusers.pipelines.flux.pipeline_flux import FluxPipeline
 from PIL import Image
 import logging
+from collections import defaultdict
 
-from ..adapter import BaseAdapter, BaseSample
+from accelerate import Accelerator
+import torch
+from diffusers.pipelines.flux.pipeline_flux import FluxPipeline
+
+from ..samples import T2ISample
+from ..adapter import BaseAdapter
 from ...hparams import *
-from ...scheduler import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput, set_scheduler_timesteps
+from ...scheduler import FlowMatchEulerDiscreteSDEScheduler, SDESchedulerOutput, set_scheduler_timesteps
 from ...utils.base import filter_kwargs
+from ...utils.logger_utils import setup_logger
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
+
 
 @dataclass
-class Flux1Sample(BaseSample):
+class Flux1Sample(T2ISample):
     """Output class for Flux Adapter models."""
     pooled_prompt_embeds : Optional[torch.FloatTensor] = None
+    image_ids : Optional[torch.Tensor] = None
 
 
 class Flux1Adapter(BaseAdapter):
     """Concrete implementation for Flow Matching models (FLUX.1)."""
     
-    def __init__(self, config: Arguments):
-        super().__init__(config)
+    def __init__(self, config: Arguments, accelerator : Accelerator):
+        super().__init__(config, accelerator)
+        self.pipeline: FluxPipeline
+        self.scheduler: FlowMatchEulerDiscreteSDEScheduler
     
     def load_pipeline(self) -> FluxPipeline:
         return FluxPipeline.from_pretrained(
@@ -43,6 +65,17 @@ class Flux1Adapter(BaseAdapter):
             "ff.net.0.proj", "ff.net.2",
             "ff_context.net.0.proj", "ff_context.net.2",
         ]
+
+    # ========================== Tokenizer & Text Encoder ==========================
+    @property
+    def tokenizer(self) -> Any:
+        """Use T5 for longer context length."""
+        return self.pipeline.tokenizer_2
+
+    @property
+    def text_encoder(self) -> Any:
+        """Use T5 text encoder."""
+        return self.pipeline.text_encoder_2
 
     # ======================== Encoding & Decoding ========================
     
@@ -106,23 +139,20 @@ class Flux1Adapter(BaseAdapter):
         prompt_ids : Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         pooled_prompt_embeds: Optional[torch.Tensor] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
-        num_inference_steps: Optional[int] = None,
-        guidance_scale: Optional[float] = None,
+        height: int = 512,
+        width: int = 512,
+        num_inference_steps: int = 28,
+        guidance_scale: float = 3.5,
         generator: Optional[torch.Generator] = None,
         compute_log_prob: bool = True,
+        extra_call_back_kwargs: List[str] = [],
     ) -> List[Flux1Sample]:
         """Execute generation and return FluxSample objects."""
         
-        # Setup
-        height = height or (self.training_args.resolution[0] if self.training else self.training_args.eval_args.resolution[0])
-        width = width or (self.training_args.resolution[1] if self.training else self.training_args.eval_args.resolution[1])
-        num_inference_steps = num_inference_steps or (self.training_args.num_inference_steps if self.training else self.training_args.eval_args.num_inference_steps)
-        guidance_scale = guidance_scale or (self.training_args.guidance_scale if self.training else self.training_args.eval_args.guidance_scale)
+        # 1. Setup
         device = self.device
-        dtype = self.transformer.dtype
-        # Encode prompts if not provided
+        
+        # 2. Encode prompts if not provided
         if prompt_embeds is None:
             encoded = self.encode_prompt(prompt)
             prompt_embeds = encoded['prompt_embeds']
@@ -133,12 +163,13 @@ class Flux1Adapter(BaseAdapter):
             pooled_prompt_embeds = pooled_prompt_embeds.to(device)
 
         batch_size = len(prompt_embeds)
+        dtype = prompt_embeds.dtype
 
         text_ids = torch.zeros(prompt_embeds.shape[1], 3).to(
             device=device, dtype=dtype
         )
         
-        # Prepare latents
+        # 3. Prepare latents
         num_channels_latents = self.pipeline.transformer.config.in_channels // 4
         latents, latent_image_ids = self.pipeline.prepare_latents(
             batch_size=batch_size,
@@ -150,7 +181,7 @@ class Flux1Adapter(BaseAdapter):
             generator=generator,
         )
         
-        # Set timesteps with scheduler
+        # 4. Set timesteps with scheduler
         timesteps = set_scheduler_timesteps(
             scheduler=self.pipeline.scheduler,
             num_inference_steps=num_inference_steps,
@@ -160,16 +191,17 @@ class Flux1Adapter(BaseAdapter):
 
         guidance = torch.full([1], guidance_scale, device=device, dtype=torch.float32)
         
-        # Denoising loop
+        # 5. Denoising loop
         all_latents = [latents]
         all_log_probs = [] if compute_log_prob else None
+        extra_call_back_res = defaultdict(list)
         
         for i, t in enumerate(timesteps):
             timestep = t.expand(batch_size).to(latents.dtype)
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
             
             # Predict noise
-            noise_pred = self.pipeline.transformer(
+            noise_pred = self.transformer(
                 hidden_states=latents,
                 timestep=timestep / 1000,
                 guidance=guidance.expand(batch_size),
@@ -183,36 +215,66 @@ class Flux1Adapter(BaseAdapter):
             
             # Scheduler step
             output = self.scheduler.step(
-                model_output=noise_pred,
+                noise_pred=noise_pred,
                 timestep=t,
-                sample=latents,
+                latents=latents,
                 compute_log_prob=compute_log_prob and current_noise_level > 0,
             )
             
-            latents = output.prev_sample.to(dtype)
+            latents = output.next_latents.to(dtype)
             all_latents.append(latents)
             
             if compute_log_prob:
                 all_log_probs.append(output.log_prob)
+
+            if extra_call_back_kwargs:
+                capturable = {'noise_pred': noise_pred, 'noise_levels': current_noise_level}
+                for key in extra_call_back_kwargs:
+                    if key in capturable and capturable[key] is not None:
+                        # First check in capturable dict
+                        extra_call_back_res[key].append(capturable[key])
+                    elif hasattr(output, key):
+                        # Then check in output
+                        val = getattr(output, key)
+                        if val is not None:
+                            extra_call_back_res[key].append(val)
+
         
-        # Decode images
+        # 6. Decode images
         images = self.decode_latents(latents, height, width)
         
-        # Create samples
+        # 7. Create samples
+        # Transpose `extra_call_back_res` tensors to have batch dimension first
+        # (T, B, ...) -> (B, T, ...)
+        extra_call_back_res = {
+            k: torch.stack(v, dim=1)
+            if isinstance(v[0], torch.Tensor) else v
+            for k, v in extra_call_back_res.items()
+        }
         samples = [
             Flux1Sample(
+                # Denoising trajectory
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
                 timesteps=timesteps,
+                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
+
+                # Prompt
                 prompt_ids=prompt_ids[b] if prompt_ids is not None else None,
+                prompt_embeds=prompt_embeds[b],
+                pooled_prompt_embeds=pooled_prompt_embeds[b],
+
+                # Image & metadata
                 height=height,
                 width=width,
                 prompt=prompt[b] if isinstance(prompt, list) else prompt,
                 image=images[b],
-                prompt_embeds=prompt_embeds[b],
-                pooled_prompt_embeds=pooled_prompt_embeds[b],
                 image_ids=latent_image_ids,
-                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
-                extra_kwargs={'guidance_scale': guidance_scale},
+
+                # Extra kwargs
+                extra_kwargs={
+                    'guidance_scale': guidance_scale,
+                    **{k: v[b] for k, v in extra_call_back_res.items()}
+                },
             )
             for b in range(batch_size)
         ]
@@ -229,7 +291,7 @@ class Flux1Adapter(BaseAdapter):
         timestep_index : int,
         compute_log_prob: bool = True,
         **kwargs,
-    ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
+    ) -> SDESchedulerOutput:
         """Compute log-probabilities for training."""
         
         batch_size = len(samples)
@@ -244,6 +306,8 @@ class Flux1Adapter(BaseAdapter):
         latents = torch.stack([s.all_latents[timestep_index] for s in samples], dim=0).to(device)
         next_latents = torch.stack([s.all_latents[timestep_index + 1] for s in samples], dim=0).to(device)
         timestep = torch.stack([s.timesteps[timestep_index] for s in samples], dim=0).to(device)
+        num_inference_steps = len(samples[0].timesteps)
+        t = timestep[0]
         
         prompt_embeds = torch.stack([s.prompt_embeds for s in samples], dim=0).to(device)
         pooled_prompt_embeds = torch.stack([s.pooled_prompt_embeds for s in samples], dim=0).to(device)
@@ -253,14 +317,14 @@ class Flux1Adapter(BaseAdapter):
         # 2. Set scheduler timesteps
         _ = set_scheduler_timesteps(
             scheduler=self.scheduler,
-            num_inference_steps=self.training_args.num_inference_steps,
+            num_inference_steps=num_inference_steps,
             seq_len=latents.shape[1],
             device=device
         )
     
         
         # 3. Forward pass
-        noise_pred = self.pipeline.transformer(
+        noise_pred = self.transformer(
             hidden_states=latents,
             timestep=timestep / 1000,
             guidance=guidance.expand(batch_size),
@@ -275,10 +339,10 @@ class Flux1Adapter(BaseAdapter):
         # 4. Compute log prob with given next_latents
         step_kwargs = filter_kwargs(self.scheduler.step, **kwargs)
         output = self.scheduler.step(
-            model_output=noise_pred,
+            noise_pred=noise_pred,
             timestep=timestep,
-            sample=latents,
-            prev_sample=next_latents,
+            latents=latents,
+            next_latents=next_latents,
             compute_log_prob=compute_log_prob,
             return_dict=True,
             **step_kwargs,

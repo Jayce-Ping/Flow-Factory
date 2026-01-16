@@ -1,3 +1,17 @@
+# Copyright 2026 Jayce-Ping
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # src/flow_factory/hparams/training_args.py
 import os
 import math
@@ -8,10 +22,11 @@ from typing import Any, List, Literal, Union, Optional, Tuple, Dict
 import logging
 import torch.distributed as dist
 from datetime import datetime
-from .abc import ArgABC
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+from .abc import ArgABC
+from ..utils.logger_utils import setup_logger
+
+logger = setup_logger(__name__, rank_zero_only=True)
 
 
 def get_world_size() -> int:
@@ -134,14 +149,6 @@ class TrainingArguments(ArgABC):
         default="grpo",
         metadata={"help": "Type of trainer to use."},
     )
-    clip_range: Union[float, tuple[float, float]] = field(
-        default=(-1e-4, 1e-4),
-        metadata={"help": "Clipping range for PPO/GRPO."},
-    )
-    adv_clip_range: Union[float, tuple[float, float]] = field(
-        default=(-5.0, 5.0),
-        metadata={"help": "Clipping range for advantages in PPO/GRPO."},
-    )
     group_size: int = field(
         default=16,
         metadata={"help": "Group size for GRPO sampling."},
@@ -154,42 +161,44 @@ class TrainingArguments(ArgABC):
         default=True,
         metadata={"help": "Whether to use global std for GRPO Advantage normalization."},
     )
+    clip_range: Union[float, tuple[float, float]] = field(
+        default=(-1e-4, 1e-4),
+        metadata={"help": "Clipping range for PPO/GRPO."},
+    )
+    adv_clip_range: Union[float, tuple[float, float]] = field(
+        default=(-5.0, 5.0),
+        metadata={"help": "Clipping range for advantages in PPO/GRPO."},
+    )
+    kl_type: Literal['v-based', 'x-based'] = field(
+        default='x-based',
+        metadata={"help": """Type of KL divergence to use.
+            'v-based': KL divergence in velocity space.
+            'x-based': KL divergence in latent space."""},
+    )
+    kl_beta: float = field(
+         default=0,
+            metadata={"help": "KL penalty beta for PPO/GRPO."},
+    )
+    ref_param_device : Literal["cpu", "same_as_model"] = field(
+        default="same_as_model",
+        metadata={"help": "Device to store reference model parameters."},
+    )
+
+    # NFT arguments
+    nft_beta: float = field(
+        default=1,
+        metadata={"help": "Beta parameter for NFT trainer."},
+    )
 
     # Sampling arguments
-    dynamics_type: Literal["Flow-SDE", 'Dance-SDE', 'CPS', 'ODE'] = field(
-        default="Flow-SDE",
-        metadata={"help": "Type of SDE to use."},
-    )
     num_inference_steps: int = field(
         default=10,
         metadata={"help": "Number of timesteps for SDE."},
-    )
-    noise_level: float = field(
-        default=0.7,
-        metadata={"help": "Noise level for SDE sampling."},
-    )
-    mix_ratio: float = field(
-        default=0.01,
-        metadata={"help": "Mix ratio between two initial latents for SDE sampling."},
-    )
-    num_train_steps : int = field(
-        default=1,
-        metadata={"help": "Number of train steps."},
-    )
-    train_steps: Optional[List[int]] = field(
-        default=None,
-        metadata={"help": (
-            "Training steps for optimization. "
-            "    `train_steps` will be randomly sampled from this list."
-            "    If None, will use the first 1/2 of the timesteps."
-        )
-        },
     )
     guidance_scale: float = field(
         default=3.5,
         metadata={"help": "Guidance scale for sampling."},
     )
-
 
     # Environment arguments
     seed: int = field(
@@ -232,16 +241,6 @@ class TrainingArguments(ArgABC):
         metadata={"help": "Update EMA every N steps."},
     )
 
-    save_freq: int = field(
-        default=10,
-        metadata={"help": "Model saving frequency (in epochs). 0 for no saving."},
-    )
-
-    save_dir: str = field(
-        default='save',
-        metadata={"help": "Directory to save logs and checkpoints. None for no saving."},
-    )
-
     def __post_init__(self):
         if not self.resolution:
             logger.warning("`resolution` is not set, using default (512, 512).")
@@ -276,12 +275,9 @@ class TrainingArguments(ArgABC):
         world_size = get_world_size()
         logger.info("World Size:" + str(world_size))
 
-        if self.train_steps is None:
-            self.train_steps = list(range(self.num_inference_steps // 2))
-
         # Adjust unique_sample_num for even distribution
         sample_num_per_iteration = world_size * self.per_device_batch_size
-        step = sample_num_per_iteration // math.gcd(self.unique_sample_num_per_epoch, sample_num_per_iteration)
+        step = sample_num_per_iteration // math.gcd(self.group_size, sample_num_per_iteration)
         new_m = (self.unique_sample_num_per_epoch + step - 1) // step * step
         if new_m != self.unique_sample_num_per_epoch:
             logger.warning(f"Adjusted `unique_sample_num` from {self.unique_sample_num_per_epoch} to {new_m} to make sure `unique_sample_num`*`group_size` is multiple of `batch_size`*`num_replicas` for even distribution.")
@@ -308,11 +304,6 @@ class TrainingArguments(ArgABC):
             else:
                 self.learning_rate = 1e-5
             logger.info(f"`learning_rate` is not set, using default {self.learning_rate} for `{self.trainer_type}` training.")
-
-        # Expand path to user's path
-        self.save_dir = os.path.expanduser(self.save_dir)
-        # If save_dir does not exist, create it
-        os.makedirs(self.save_dir, exist_ok=True)
 
     def to_dict(self) -> dict[str, Any]:
         return super().to_dict()

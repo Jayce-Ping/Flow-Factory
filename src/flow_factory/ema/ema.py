@@ -1,8 +1,25 @@
+# Copyright 2026 Jayce-Ping
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # src/flow_factory/ema/ema.py
 from typing import Optional
 from collections.abc import Iterable
 from contextlib import contextmanager
 import torch
+from ..utils.logger_utils import setup_logger
+
+logger = setup_logger(__name__)
 
 
 class EMAModuleWrapper:
@@ -44,7 +61,7 @@ class EMAModuleWrapper:
         
         # Validation
         assert 0.0 <= decay <= 1.0, f"Decay must be in [0, 1], got {decay}"
-        assert update_step_interval > 0, f"Update interval must be > 0"
+        assert update_step_interval >= 0, f"""Update interval must be >= 0. Got {update_step_interval}. (0 indicates no updates, to maintain initial params.)"""
 
     def get_current_decay(self, optimization_step: int) -> float:
         """Calculate current decay with optional warmup."""
@@ -64,7 +81,7 @@ class EMAModuleWrapper:
         optimization_step: int
     ) -> None:
         """Update EMA parameters."""
-        if (optimization_step + 1) % self.update_step_interval != 0:
+        if self.update_step_interval <= 0 or (optimization_step + 1) % self.update_step_interval != 0:
             return
             
         parameters = list(parameters)
@@ -114,6 +131,9 @@ class EMAModuleWrapper:
             self.temp_stored_parameters = [p.detach().cpu().clone() for p in parameters]
         
         for ema_param, param in zip(self.ema_parameters, parameters, strict=True):
+            if param.numel() == 0:
+                continue
+
             param.data.copy_(ema_param.to(param.device).data)
 
     def copy_temp_to(self, parameters: Iterable[torch.nn.Parameter]) -> None:

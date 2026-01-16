@@ -1,7 +1,21 @@
+# Copyright 2026 Jayce-Ping
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # src/flow_factory/hparams/data_args.py
 import yaml
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Tuple, Union, List, Iterable
 from .abc import ArgABC
 
 
@@ -11,6 +25,14 @@ class DataArguments(ArgABC):
     dataset_dir: str = field(
         default="data",
         metadata={"help": "Path to the folder containing the datasets."},
+    )
+    image_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to the folder containing conditioning images. Defaults to 'images' subfolder in dataset_dir."},
+    )
+    video_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to the folder containing conditioning videos. Defaults to 'videos' subfolder in dataset_dir."},
     )
     preprocessing_batch_size: int = field(
         default=8,
@@ -25,10 +47,9 @@ class DataArguments(ArgABC):
         metadata={"help": "Whether to enable preprocessing of the dataset."},
     )
     force_reprocess: bool = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether to force reprocessing of the dataset even if cached data exists."},
     )
-
     max_dataset_size: Optional[int] = field(
         default=None,
         metadata={"help": "If set, limits the maximum number of samples in the dataset."},

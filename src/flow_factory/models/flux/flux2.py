@@ -1,38 +1,82 @@
+# Copyright 2026 Jayce-Ping
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # src/flow_factory/models/flux/flux2.py
 from __future__ import annotations
 
 import os
-from typing import Union, List, Dict, Any, Optional, Tuple
+from typing import Union, List, Dict, Any, Optional, Tuple, Literal
 from dataclasses import dataclass
+from PIL import Image
+from collections import defaultdict
+import numpy as np
+from accelerate import Accelerator
 import torch
 from diffusers.pipelines.flux2.pipeline_flux2 import Flux2Pipeline, format_input, compute_empirical_mu
 from diffusers.pipelines.flux2.system_messages import SYSTEM_MESSAGE, SYSTEM_MESSAGE_UPSAMPLING_T2I, SYSTEM_MESSAGE_UPSAMPLING_I2I
-from PIL import Image
 import logging
 
-from ..adapter import BaseAdapter, BaseSample
+from ..adapter import BaseAdapter
+from ..samples import I2ISample
 from ...hparams import *
-from ...scheduler import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput, set_scheduler_timesteps
-from ...utils.base import filter_kwargs, pil_image_to_tensor
+from ...scheduler import FlowMatchEulerDiscreteSDEScheduler, SDESchedulerOutput, set_scheduler_timesteps
+from ...utils.base import (
+    filter_kwargs,
+    is_pil_image_batch_list,
+    is_pil_image_list,
+    tensor_to_pil_image,
+    tensor_list_to_pil_image,
+    numpy_list_to_pil_image,
+    numpy_to_pil_image,
+    pil_image_to_tensor,
+    standardize_image_batch,
+)
+from ...utils.logger_utils import setup_logger
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
+
 
 @dataclass
-class Flux2Sample(BaseSample):
+class Flux2Sample(I2ISample):
     """Output class for Flux2Adapter models."""
+    latent_ids : Optional[torch.Tensor] = None
     text_ids : Optional[torch.Tensor] = None
-    condition_images : Optional[Union[List[Image.Image], Image.Image]] = None
     image_latents : Optional[torch.Tensor] = None
     image_latent_ids : Optional[torch.Tensor] = None
 
 
+CONDITION_IMAGE_SIZE = 1024 * 1024
+
+Flux2ImageInput = Union[
+    Image.Image,
+    np.ndarray,
+    torch.Tensor,
+    List[Image.Image],
+    List[np.ndarray],
+    List[torch.Tensor]
+]
+
 class Flux2Adapter(BaseAdapter):
     """Concrete implementation for Flow Matching models (FLUX.2)."""
     
-    def __init__(self, config: Arguments):
-        super().__init__(config)
+    def __init__(self, config: Arguments, accelerator : Accelerator):
+        super().__init__(config, accelerator)
+        self.pipeline: Flux2Pipeline
+        self.scheduler: FlowMatchEulerDiscreteSDEScheduler
+        
         self._has_warned_inference_fallback = False
+        self._has_warned_forward_fallback = False
         self._has_warned_preprocess_fallback = False
     
     def load_pipeline(self) -> Flux2Pipeline:
@@ -53,7 +97,7 @@ class Flux2Adapter(BaseAdapter):
             
             # --- Single Stream Block Targets ---
             "attn.to_qkv_mlp_proj", 
-            "attn.to_out"
+            # "attn.to_out.0"
         ]
 
     # ======================== Encoding & Decoding ========================
@@ -141,12 +185,20 @@ class Flux2Adapter(BaseAdapter):
         }
 
     # ------------------------- Image Encoding ------------------------
-    def encode_image(self, images: Union[Image.Image, List[Image.Image]], **kwargs) -> Dict[str, torch.Tensor]:
+    def encode_image(
+        self,
+        images: Union[Image.Image, List[Image.Image]],
+        condition_image_size : Union[int, Tuple[int, int]] = CONDITION_IMAGE_SIZE,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.device] = None,
+        **kwargs
+    ) -> Dict[str, torch.Tensor]:
         """Encode input condition_image(s) into latent representations using the Flux.2 image encoder."""
-        device = kwargs.get('device', self.pipeline.vae.device)
-        dtype = kwargs.get('dtype', self.pipeline.vae.dtype)
+        device = device or self.pipeline.vae.device
+        dtype = dtype or self.pipeline.vae.dtype
         condition_image_tensors : List[torch.Tensor] = self._resize_condition_images(
             condition_images=images,
+            condition_image_size=condition_image_size,
             **filter_kwargs(self._resize_condition_images, **kwargs)
         )
         image_latents, image_latent_ids =  self.pipeline.prepare_image_latents(
@@ -163,7 +215,7 @@ class Flux2Adapter(BaseAdapter):
         }
     
     # ------------------------- Video Encoding ------------------------
-    def encode_video(self, video: Any, **kwargs) -> None:
+    def encode_video(self, videos: Any, **kwargs) -> None:
         """Flux.2 does not support video encoding."""
         pass
 
@@ -183,7 +235,12 @@ class Flux2Adapter(BaseAdapter):
 
         return images
 
-    def _resize_condition_images(self, condition_images: Union[Image.Image, List[Image.Image]], **kwargs) -> List[torch.Tensor]:
+    def _resize_condition_images(
+        self,
+        condition_images: Union[Image.Image, List[Image.Image]],
+        condition_image_size : Union[int, Tuple[int, int]] = CONDITION_IMAGE_SIZE,
+        **kwargs
+    ) -> List[torch.Tensor]:
         """Preprocess condition images for Flux.2 model."""
         if isinstance(condition_images, Image.Image):
             condition_images = [condition_images]
@@ -191,11 +248,16 @@ class Flux2Adapter(BaseAdapter):
         for img in condition_images:
             self.pipeline.image_processor.check_image_input(img)
 
+        if isinstance(condition_image_size, int):
+            condition_image_size = (condition_image_size, condition_image_size)
+
+        max_area = condition_image_size[0] * condition_image_size[1]
+
         condition_image_tensors = []
         for img in condition_images:
             image_width, image_height = img.size
-            if image_width * image_height > 1024 * 1024:
-                img = self.pipeline.image_processor._resize_to_target_area(img, 1024 * 1024)
+            if image_width * image_height > max_area:
+                img = self.pipeline.image_processor._resize_to_target_area(img, max_area)
                 image_width, image_height = img.size
 
             multiple_of = self.pipeline.vae_scale_factor * 2
@@ -206,154 +268,155 @@ class Flux2Adapter(BaseAdapter):
 
         return condition_image_tensors
 
+    def _standardize_image_input(
+        self,
+        images: Flux2ImageInput,
+        output_type: Literal['pil', 'pt', 'np'] = 'pil',
+    ):
+        """
+        Standardize image input to desired output type.
+        """
+        if isinstance(images, Image.Image):
+            images = [images]
+        
+        return standardize_image_batch(
+            images,
+            output_type=output_type,
+        )
 
     # ========================Preprocessing ========================
     def preprocess_func(
-            self,
-            prompt: List[str],
-            images: Optional[Union[List[Optional[Image.Image]], List[List[Optional[Image.Image]]]]] = None,
-            caption_upsample_temperature: Optional[float] = None,
-            **kwargs
-        ) -> Dict[str, Any]:
+        self,
+        prompt: List[str],
+        images: Optional[Union[List[Optional[Image.Image]], List[List[Optional[Image.Image]]]]] = None,
+        caption_upsample_temperature: Optional[float] = None,
+        **kwargs
+    ) -> Dict[str, Union[List[Any], torch.Tensor]]:
         """Preprocess inputs for Flux.2 model. The inputs are expected to be batches."""
-        assert isinstance(prompt, list), "Prompt must be a batch of strings."
         if images is not None:
-            assert len(prompt) == len(images), "Number of prompts must match number of condition image sets."
-            # A batch of image lists, convert each image to a singleton list if not already
-            images = [
-                [img] if not isinstance(img, list) else img
-                for img in images
-            ]
-        
-        if images is None:
-            # No condition images provided, process only prompts in batch
-            if caption_upsample_temperature:
-                final_prompt = self.pipeline.upsample_prompt(
+            assert len(prompt) == len(images), "Prompts and images must have same batch size"
+            # Normalize images to List[List[Image | None]]
+            if isinstance(images, list) and all(isinstance(imgs, Image.Image) or imgs is None for imgs in images):
+                images = [[imgs] for imgs in images]
+
+            has_images = any(img is not None for img_list in images for img in img_list)
+        else:
+            has_images = False
+
+
+        # Case 1: batch process when no images
+        if not has_images:
+            final_prompts = (
+                self.pipeline.upsample_prompt(
                     prompt=prompt,
                     images=None,
                     temperature=caption_upsample_temperature,
-                    device=self.pipeline.text_encoder.device
-                )
-            else:
-                final_prompt = prompt
-            
-            # 1. Process prompt
-            prompt_encode_dict = self.encode_prompt(
-                prompt=final_prompt,
-                device=self.pipeline.text_encoder.device,
+                ) if caption_upsample_temperature else prompt
+            )
+            batch = self.encode_prompt(
+                prompt=final_prompts,
                 **filter_kwargs(self.encode_prompt, **kwargs)
             )
-            # 2. No condition images
-            image_encode_dict = {
-                'image_latents': [None] * len(prompt),
-                'image_latent_ids': [None] * len(prompt),
-            }
-            batch = {**prompt_encode_dict, **image_encode_dict}
-        else:
-            # Condition images provided, process each sample individually
-            if not self._has_warned_preprocess_fallback:
-                logger.warning(
-                    "Flux.2 does not support processing with batches of condition images."
-                    "Processing each sample individually. This warning will only appear once."
-                )
-                self._has_warned_preprocess_fallback = True
+            return batch
+        
+        # Case 2: process each sample individually
 
-            # images: List[List[Optional[Image.Image]]]
-            batch = []
-            for p, imgs in zip(
-                prompt,
-                images,
-            ):
-                # imgs: List[Optional[Image.Image]]
-                if caption_upsample_temperature:
-                    final_prompt = self.pipeline.upsample_prompt(
-                        prompt=p,
-                        images=imgs,
-                        temperature=caption_upsample_temperature,
-                        device=self.pipeline.text_encoder.device
-                    )
-                else:
-                    final_prompt = p
-                
-                # 1. Process prompt
-                prompt_encode_dict = self.encode_prompt(
-                    prompt=final_prompt,
-                    device=self.pipeline.text_encoder.device,
-                    **filter_kwargs(self.encode_prompt, **kwargs)
-                )
+        if not self._has_warned_preprocess_fallback:
+            logger.warning(
+                "Flux.2: Batched image processing unsupported. Processing individually (warning shown once)."
+            )
+            self._has_warned_preprocess_fallback = True
 
-                # 2. Process condition images
-                if len(imgs) == 0 or imgs[0] is None:
-                    image_encode_dict = {
-                        'image_latents': None,
-                        'image_latent_ids': None,
-                    }
-                else:
-                    image_encode_dict = self.encode_image(
-                        images=imgs,
-                        device=self.pipeline.vae.device,
-                        **filter_kwargs(self.encode_image, **kwargs)
-                    )
+        batch = []
+        for p, imgs in zip(prompt, images):
+            final_p = (
+                self.pipeline.upsample_prompt(
+                    prompt=p,
+                    images=imgs,
+                    temperature=caption_upsample_temperature,
+                )
+                if caption_upsample_temperature else p
+            )
+            prompt_encode_dict = self.encode_prompt(
+                prompt=final_p,
+                **filter_kwargs(self.encode_prompt, **kwargs)
+            )
+
+            if len(imgs) == 0 or imgs[0] is None:
+                image_dict = {
+                    'image_latents': None,
+                    'image_latent_ids': None,
+                }
+            else:
+                image_encode_dict = self.encode_image(
+                    images=imgs,
+                    **filter_kwargs(self.encode_image, **kwargs)
+                )
                 sample = {**prompt_encode_dict, **image_encode_dict}
                 batch.append(sample)
-
-            # Collate batch, convert List[Dict] to Dict[List]
-            batch = {
-                k : [sample[k] for sample in batch]
-                for k in batch[0].keys()
-            }
-
-        return batch
+    
+        # Collate batch
+        collated_batch ={
+            k: [sample[k] for sample in batch]
+            for k in batch[0].keys()
+        }
+        return collated_batch
         
     
     # ======================== Sampling / Inference ========================
 
     # Since Flux.2 does not support ragged batches of condition images, we implement a single-sample inference method.
+    @torch.no_grad()
     def _inference(
         self,
-        condition_images: Optional[Union[List[Image.Image], Image.Image]] = None,
+        # Ordinary arguments
+        images: Optional[Flux2ImageInput] = None,
         prompt: Union[str, List[str]] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
+        height: int = 1024,
+        width: int = 1024,
         num_inference_steps: int = 50,
-        guidance_scale: Optional[float] = 4.0,
+        guidance_scale: float = 4.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+
+        # Prompt encoding arguments
         prompt_ids: Optional[torch.LongTensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         text_ids: Optional[torch.Tensor] = None,
+
+        # Image encoding arguments
         image_latents: Optional[Union[torch.Tensor, List[Union[None, torch.Tensor]]]] = None,
         image_latent_ids: Optional[Union[torch.Tensor, List[Union[None, torch.Tensor]]]] = None,
+
+        # Other arguments
         attention_kwargs: Optional[Dict[str, Any]] = None,
         max_sequence_length: int = 512,
         text_encoder_out_layers: Tuple[int] = (10, 20, 30),
         caption_upsample_temperature: Optional[float] = None,
         compute_log_prob: bool = False,
+
+        # Extra callback arguments
+        extra_call_back_kwargs: List[str] = [],
     ) -> List[Flux2Sample]:
         """
         Inference method for Flux.2 model for a single sample.
         The condition images can be a list of images or a single image, shared across the batch.
         """
 
-        # 1. Setup
-        height = height or (self.training_args.resolution[0] if self.training else self.training_args.eval_args.resolution[0])
-        width = width or (self.training_args.resolution[1] if self.training else self.training_args.eval_args.resolution[1])
-        num_inference_steps = num_inference_steps or (self.training_args.num_inference_steps if self.training else self.training_args.eval_args.num_inference_steps)
-        guidance_scale = guidance_scale or (self.training_args.guidance_scale if self.training else self.training_args.eval_args.guidance_scale)
+        # 1. Preprocess inputs
         device = self.device
-        dtype = self.transformer.dtype
+        if isinstance(prompt, str):
+            prompt = [prompt]
+        
+        if images is not None:
+            images = self._standardize_image_input(images, output_type='pt')
 
-        # 2. Preprocess inputs
         if (
-            prompt_embeds is None or text_ids is None
-            or image_latents is None or image_latent_ids is None
+            (prompt is not None and (prompt_embeds is None or text_ids is None))
+            or (images is not None and (image_latents is None or image_latent_ids is None))
         ):
-            if isinstance(prompt, str):
-                prompt = [prompt]
-            if isinstance(condition_images, Image.Image):
-                condition_images = [condition_images]
             encode_dict = self.preprocess_func(
                 prompt=prompt,
-                images=condition_images,
+                images=images,
                 device=device,
                 text_encoder_out_layers=text_encoder_out_layers,
                 max_sequence_length=max_sequence_length,
@@ -362,8 +425,8 @@ class Flux2Adapter(BaseAdapter):
             prompt_ids = encode_dict['prompt_ids'][0]
             prompt_embeds = encode_dict['prompt_embeds'][0]
             text_ids = encode_dict['text_ids'][0]
-            image_latents = encode_dict['image_latents'][0]
-            image_latent_ids = encode_dict['image_latent_ids'][0]
+            image_latents = encode_dict['image_latents'][0] if encode_dict['image_latents'] is not None else None
+            image_latent_ids = encode_dict['image_latent_ids'][0] if encode_dict['image_latent_ids'] is not None else None
         else:
             prompt_ids = prompt_ids.to(device)
             prompt_embeds = prompt_embeds.to(device)
@@ -372,20 +435,21 @@ class Flux2Adapter(BaseAdapter):
             image_latent_ids = image_latent_ids.to(device) if image_latent_ids is not None else None
 
         batch_size = prompt_embeds.shape[0]
+        dtype = prompt_embeds.dtype
 
-        # 3. Prepare initial noise
+        # 2. Prepare initial noise
         num_channels_latents = self.pipeline.transformer.config.in_channels // 4
         latents, latent_ids = self.pipeline.prepare_latents(
             batch_size=batch_size,
             num_latents_channels=num_channels_latents,
             height=height,
             width=width,
-            dtype=prompt_embeds.dtype,
+            dtype=dtype,
             device=device,
             generator=generator,
         )
 
-        # 4. Prepare timesteps
+        # 3. Prepare timesteps
         mu = compute_empirical_mu(image_seq_len=latents.shape[1], num_steps=num_inference_steps)
         timesteps = set_scheduler_timesteps(
             scheduler=self.pipeline.scheduler,
@@ -398,65 +462,103 @@ class Flux2Adapter(BaseAdapter):
         guidance = guidance.expand(latents.shape[0])
 
 
-        # 5. Run diffusion process
+        # 4. Run diffusion process
         all_latents = [latents]
         all_log_probs = [] if compute_log_prob else None
+        extra_call_back_res = defaultdict(list)
+
         for i, t in enumerate(timesteps):
-                timestep = t.expand(latents.shape[0]).to(latents.dtype)
-                current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
+            timestep = t.expand(latents.shape[0]).to(latents.dtype)
+            current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
 
-                latent_model_input = latents.to(self.pipeline.transformer.dtype)
-                latent_image_ids = latent_ids
+            latent_model_input = latents.to(torch.float32)
+            latent_image_ids = latent_ids
 
-                if image_latents is not None:
-                    latent_model_input = torch.cat([latents, image_latents], dim=1).to(self.pipeline.transformer.dtype)
-                    latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
+            if image_latents is not None:
+                latent_model_input = torch.cat([latents, image_latents], dim=1).to(torch.float32)
+                latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
 
-                noise_pred = self.transformer(
-                    hidden_states=latent_model_input,  # (B, image_seq_len, C)
-                    timestep=timestep / 1000,
-                    guidance=guidance,
-                    encoder_hidden_states=prompt_embeds,
-                    txt_ids=text_ids,  # B, text_seq_len, 4
-                    img_ids=latent_image_ids,  # B, image_seq_len, 4
-                    joint_attention_kwargs=attention_kwargs,
-                    return_dict=False,
-                )[0]
+            noise_pred = self.transformer(
+                hidden_states=latent_model_input,  # (B, image_seq_len, C)
+                timestep=timestep / 1000,
+                guidance=guidance,
+                encoder_hidden_states=prompt_embeds,
+                txt_ids=text_ids,  # B, text_seq_len, 4
+                img_ids=latent_image_ids,  # B, image_seq_len, 4
+                joint_attention_kwargs=attention_kwargs,
+                return_dict=False,
+            )[0]
 
-                noise_pred = noise_pred[:, : latents.size(1) :]
+            noise_pred = noise_pred[:, : latents.size(1) :]
 
-                # compute the previous noisy sample x_t -> x_t-1
-                latents_dtype = latents.dtype
-                output = self.scheduler.step(
-                    model_output=noise_pred,
-                    timestep=t,
-                    sample=latents,
-                    compute_log_prob=compute_log_prob and current_noise_level > 0,
-                )
+            # compute the previous noisy sample x_t -> x_t-1
+            output = self.scheduler.step(
+                noise_pred=noise_pred,
+                timestep=t,
+                latents=latents,
+                compute_log_prob=compute_log_prob and current_noise_level > 0,
+            )
 
-                latents = output.prev_sample.to(dtype)
-                all_latents.append(latents)
-                
-                if compute_log_prob:
-                    all_log_probs.append(output.log_prob)
+            latents = output.next_latents.to(dtype)
+            all_latents.append(latents)
+            
+            if compute_log_prob:
+                all_log_probs.append(output.log_prob)
 
-        images = self.decode_latents(latents, latent_ids)
+            if extra_call_back_kwargs:
+                capturable = {'noise_pred': noise_pred, 'noise_levels': current_noise_level}
+                for key in extra_call_back_kwargs:
+                    if key in capturable and capturable[key] is not None:
+                        # First check in capturable dict
+                        extra_call_back_res[key].append(capturable[key])
+                    elif hasattr(output, key):
+                        # Then check in output
+                        val = getattr(output, key)
+                        if val is not None:
+                            extra_call_back_res[key].append(val)
+
+        # 5. Decode latents to images
+        decoded_images = self.decode_latents(latents, latent_ids)
+        # decoded_condition_images = self.decode_latents(image_latents, image_latent_ids) if image_latents is not None else None
+
+        # 6. Create samples
+
+        # Transpose `extra_call_back_res` tensors to have batch dimension first
+        # (T, B, ...) -> (B, T, ...)
+        extra_call_back_res = {
+            k: torch.stack(v, dim=1)
+            if isinstance(v[0], torch.Tensor) else v
+            for k, v in extra_call_back_res.items()
+        }
+
         samples = [
             Flux2Sample(
+                # Denoising trajectory
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
                 timesteps=timesteps,
+                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
+
+                # Generated image & metadata
                 height=height,
                 width=width,
+                image=decoded_images[b],
+                latent_ids=latent_ids[b],
+
+                # Prompt & condition info
                 prompt=prompt[b] if isinstance(prompt, list) else prompt,
                 prompt_ids=prompt_ids[b],
                 prompt_embeds=prompt_embeds[b],
-                text_ids=text_ids[b] if text_ids is not None else None,
-                condition_images=condition_images if condition_images is not None else None,
+                text_ids=text_ids[b],
+
+                # Condition images & latents
+                # condition_images=decoded_condition_images if decoded_condition_images is not None else None
+                condition_images=images if images is not None else None,
                 image_latents=image_latents[b] if image_latents is not None else None,
                 image_latent_ids=image_latent_ids[b] if image_latent_ids is not None else None,
-                image=images[b],
-                log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
-                extra_kwargs={'guidance_scale': guidance_scale},
+                extra_kwargs={
+                    'guidance_scale': guidance_scale,
+                    **{k: v[b] for k, v in extra_call_back_res.items()}
+                },
             )
             for b in range(batch_size)
         ]
@@ -465,14 +567,15 @@ class Flux2Adapter(BaseAdapter):
         
         return samples
 
+    @torch.no_grad()
     def inference(
         self,
-        condition_images: Optional[Union[List[Image.Image], List[List[Image.Image]]]] = None,
-        prompt: Union[str, List[str]] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
+        images: Optional[Union[Flux2ImageInput, List[Flux2ImageInput]]] = None,
+        prompt: Optional[List[str]] = None,
+        height: int = 1024,
+        width: int = 1024,
         num_inference_steps: int = 50,
-        guidance_scale: Optional[float] = 4.0,
+        guidance_scale: float = 4.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         prompt_ids: Optional[torch.LongTensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
@@ -484,80 +587,176 @@ class Flux2Adapter(BaseAdapter):
         text_encoder_out_layers: Tuple[int] = (10, 20, 30),
         caption_upsample_temperature: Optional[float] = None,
         compute_log_prob: bool = False,
+        extra_call_back_kwargs: List[str] = []
     ) -> List[Flux2Sample]:
-        # Check if images are given as a batch of image lists
-        if (
-            condition_images is not None 
-            and isinstance(condition_images, list)
-            and any(isinstance(i, list) for i in condition_images) # A batch of image lists
-        ):
-            if not self._has_warned_inference_fallback:
-                logger.warning(
-                    "FLUX.2 does not support batch inference with varying condition images per sample. "
-                    "Falling back to single-sample inference. This warning will only appear once."
-                )
-                self._has_warned_inference_fallback = True
-            # Process each sample individually by calling _inference_single
-            samples = []
-            # Expand prompt if needed
-            if not isinstance(prompt, list):
-                prompt = [prompt] * len(condition_images)
-            for idx in range(len(condition_images)):
-                sample = self._inference(
-                    condition_images=condition_images[idx],
-                    prompt=prompt[idx],
-                    height=height,
-                    width=width,
-                    num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    generator=generator,
-                    prompt_ids=prompt_ids,
-                    prompt_embeds=prompt_embeds,
-                    text_ids=text_ids,
-                    image_latents=image_latents[idx] if image_latents is not None else None,
-                    image_latent_ids=image_latent_ids[idx] if image_latent_ids is not None else None,
-                    attention_kwargs=attention_kwargs,
-                    max_sequence_length=max_sequence_length,
-                    text_encoder_out_layers=text_encoder_out_layers,
-                    caption_upsample_temperature=caption_upsample_temperature,
-                    compute_log_prob=compute_log_prob,
-                )
-                samples.append(sample[0])
-            return samples
-
-        else:
+        """Batch inference for Flux2"""
+        if isinstance(prompt, str):
+            prompt = [prompt]
+        # Check for ragged inputs that require per-sample processing
+        is_ragged_images = (
+            ( isinstance(images, list) and len(images) > 0 and isinstance(images[0], list) ) # List[List[Image]]
+            or
+            ( isinstance(images, list) and len(images) > 0 and isinstance(images[0], torch.Tensor) and images[0].ndim == 4 ) # List[torch.Tensor : ndim=4]
+            or
+            ( isinstance(images, torch.Tensor) and images.ndim == 5 ) # torch.Tensor : ndim=5
+        )
+        is_ragged_image_latents = (
+            (
+                isinstance(image_latents, list) and len(image_latents) > 0
+                and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 3
+            ) # List[torch.Tensor : ndim=3]
+            or
+            (
+                isinstance(image_latents, torch.Tensor) and image_latents.ndim == 4
+            ) # torch.Tensor : ndim=4
+        )
+        if not (is_ragged_images or is_ragged_image_latents):
             # Images are shared across the batch
             return self._inference(
-                condition_images=condition_images,
+                # Ordinary args
+                images=images,
                 prompt=prompt,
                 height=height,
                 width=width,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
                 generator=generator,
+                # Encoded prompt
                 prompt_ids=prompt_ids,
                 prompt_embeds=prompt_embeds,
                 text_ids=text_ids,
+                # Encoded images
                 image_latents=image_latents,
                 image_latent_ids=image_latent_ids,
+                # Other args
                 attention_kwargs=attention_kwargs,
                 max_sequence_length=max_sequence_length,
                 text_encoder_out_layers=text_encoder_out_layers,
                 caption_upsample_temperature=caption_upsample_temperature,
                 compute_log_prob=compute_log_prob,
+                extra_call_back_kwargs=extra_call_back_kwargs,
             )
-        
+    
+        # Ragged case: per-sample fallback
+        if not self._has_warned_inference_fallback:
+            logger.warning(
+                "FLUX.2 does not support batch inference with varying condition images per sample. "
+                "Falling back to single-sample inference. This warning will only appear once."
+            )
+            self._has_warned_inference_fallback = True
+        # Process each sample individually by calling _inference
+        batch_size = len(images) if is_ragged_images else len(image_latents)
+
+        samples = []
+        for idx in range(batch_size):
+            sample = self._inference(
+                # Ordinary args
+                images=images[idx] if images is not None else None,
+                prompt=prompt[idx] if prompt is not None else None,
+                height=height,
+                width=width,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                generator=generator,
+                # Encoded prompt
+                prompt_ids=prompt_ids[idx] if prompt_ids is not None else None,
+                prompt_embeds=prompt_embeds[idx] if prompt_embeds is not None else None,
+                text_ids=text_ids[idx] if text_ids is not None else None,
+                # Encoded image
+                image_latents=image_latents[idx] if image_latents is not None else None,
+                image_latent_ids=image_latent_ids[idx] if image_latent_ids is not None else None,
+
+                # Other args
+                attention_kwargs=attention_kwargs,
+                max_sequence_length=max_sequence_length,
+                text_encoder_out_layers=text_encoder_out_layers,
+                caption_upsample_temperature=caption_upsample_temperature,
+                compute_log_prob=compute_log_prob,
+                extra_call_back_kwargs=extra_call_back_kwargs,
+            )
+            samples.extend(sample)
+        return samples
 
     # ======================== Forward (Training) ========================
-    def forward(
+
+    def _i2i_forward(
         self,
-        samples: List[Flux2Sample],
+        sample : Flux2Sample,
         timestep_index : int,
         compute_log_prob: bool = True,
         **kwargs,
-    ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
-        """Compute log-probabilities for training."""
-        
+    ) -> SDESchedulerOutput:
+        """Forward method wrapper for single sample."""
+        batch_size = 1
+        device = self.device
+
+        # 1. Extract data from sample
+        guidance_scale = sample.extra_kwargs.get('guidance_scale', self.training_args.guidance_scale)
+        guidance = torch.as_tensor([guidance_scale], device=device, dtype=torch.float32)
+
+        latents = sample.all_latents[timestep_index].unsqueeze(0).to(device)
+        next_latents = sample.all_latents[timestep_index + 1].unsqueeze(0).to(device)
+        timestep = sample.timesteps[timestep_index].unsqueeze(0).to(device)
+        num_inference_steps = len(sample.timesteps)
+        t = timestep[0]
+        prompt_embeds = sample.prompt_embeds.unsqueeze(0).to(device)
+        latent_ids = sample.latent_ids.unsqueeze(0).to(device)
+        text_ids = sample.text_ids.unsqueeze(0).to(device)
+        image_latents = sample.image_latents.unsqueeze(0).to(device) if sample.image_latents is not None else None
+        image_latent_ids = sample.image_latent_ids.unsqueeze(0).to(device) if sample.image_latent_ids is not None else None
+        attention_kwargs = sample.extra_kwargs.get('attention_kwargs', None)
+
+        latent_model_input = latents.to(torch.float32)
+        latent_image_ids = latent_ids
+
+        if image_latents is not None:
+            latent_model_input = torch.cat([latents, image_latents], dim=1).to(torch.float32)
+            latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
+
+        # 2. Set scheduler timesteps
+        mu = compute_empirical_mu(image_seq_len=latents.shape[1], num_steps=num_inference_steps)
+        timesteps = set_scheduler_timesteps(
+            scheduler=self.pipeline.scheduler,
+            num_inference_steps=num_inference_steps,
+            device=device,
+            mu=mu,
+        )
+        # 3. Predict noise
+        noise_pred = self.transformer(
+            hidden_states=latent_model_input,  # (B, image_seq_len, C)
+            timestep=timestep / 1000,
+            guidance=guidance,
+            encoder_hidden_states=prompt_embeds,
+            txt_ids=text_ids,  # B, text_seq_len, 4
+            img_ids=latent_image_ids,  # B, image_seq_len, 4
+            joint_attention_kwargs=attention_kwargs,
+            return_dict=False,
+        )[0]
+        noise_pred = noise_pred[:, : latents.size(1) :]
+
+        # 4. Compute log prob with given next_latents
+        step_kwargs = filter_kwargs(self.scheduler.step, **kwargs)
+        output = self.scheduler.step(
+            noise_pred=noise_pred,
+            timestep=timestep,
+            latents=latents,
+            next_latents=next_latents,
+            compute_log_prob=compute_log_prob,
+            return_dict=True,
+            **step_kwargs,
+        )
+        return output
+
+    def _t2i_forward(
+        self,
+        samples: Union[Flux2Sample, List[Flux2Sample]],
+        timestep_index : int,
+        compute_log_prob: bool = True,
+        **kwargs,        
+    ) -> SDESchedulerOutput:
+        if not isinstance(samples, list):
+            samples = [samples]
+
         batch_size = len(samples)
         device = self.device
         guidance_scale = [
@@ -570,33 +769,27 @@ class Flux2Adapter(BaseAdapter):
         latents = torch.stack([s.all_latents[timestep_index] for s in samples], dim=0).to(device)
         next_latents = torch.stack([s.all_latents[timestep_index + 1] for s in samples], dim=0).to(device)
         timestep = torch.stack([s.timesteps[timestep_index] for s in samples], dim=0).to(device)
+        num_inference_steps = len(samples[0].timesteps)
+        t = timestep[0]
         prompt_embeds = torch.stack([s.prompt_embeds for s in samples], dim=0).to(device)
+        latent_ids = torch.stack([s.latent_ids for s in samples], dim=0).to(device)
         text_ids = torch.stack([s.text_ids for s in samples], dim=0).to(device)
-        image_latents = torch.stack(
-            [s.image_latents for s in samples],
-            dim=0
-        ) if samples[0].image_latents is not None else None
-        image_latent_ids = torch.stack(
-            [s.image_latent_ids for s in samples],
-            dim=0
-        ) if samples[0].image_latent_ids is not None else None
+        image_latents =  None # Hard code for T2I
+        image_latent_ids =  None
+        attention_kwargs = samples[0].extra_kwargs.get('attention_kwargs', None)
 
         # Catenate condition latents if given
-        latent_model_input = latents.to(self.pipeline.transformer.dtype)
+        latent_model_input = latents.to(torch.float32)
         latent_image_ids = latent_ids
-
-        if image_latents is not None:
-            latent_model_input = torch.cat([latents, image_latents], dim=1).to(self.pipeline.transformer.dtype)
-            latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
                 
         # 2. Set scheduler timesteps
-        _ = set_scheduler_timesteps(
-            scheduler=self.scheduler,
-            num_inference_steps=self.training_args.num_inference_steps,
-            seq_len=latents.shape[1],
-            device=device
-        )
-        
+        mu = compute_empirical_mu(image_seq_len=latents.shape[1], num_steps=num_inference_steps)
+        timesteps = set_scheduler_timesteps(
+            scheduler=self.pipeline.scheduler,
+            num_inference_steps=num_inference_steps,
+            device=device,
+            mu=mu,
+        )        
 
         # 3. Predict noise
         noise_pred = self.transformer(
@@ -615,13 +808,62 @@ class Flux2Adapter(BaseAdapter):
         # 4. Compute log prob with given next_latents
         step_kwargs = filter_kwargs(self.scheduler.step, **kwargs)
         output = self.scheduler.step(
-            model_output=noise_pred,
+            noise_pred=noise_pred,
             timestep=timestep,
-            sample=latents,
-            prev_sample=next_latents,
+            latents=latents,
+            next_latents=next_latents,
             compute_log_prob=compute_log_prob,
             return_dict=True,
             **step_kwargs,
         )
         
+        return output
+
+    def forward(
+        self,
+        samples: List[Flux2Sample],
+        timestep_index : int,
+        compute_log_prob: bool = True,
+        **kwargs,
+    ) -> SDESchedulerOutput:
+        """Compute log-probabilities for training."""
+        # Determine T2I / I2I
+        is_i2i = any(
+            s.image_latents is not None
+            for s in samples
+        )
+
+        if is_i2i:
+            if not self._has_warned_forward_fallback:
+                logger.warning(
+                    "Flux.2: Batched I2I training unsupported. Falling back to single-sample forward (warning shown once)."
+                )
+                self._has_warned_forward_fallback = True
+            # Fallback to single-sample forward
+            outputs = []
+            for s in samples:
+                out = self._i2i_forward(
+                    sample=s,
+                    timestep_index=timestep_index,
+                    compute_log_prob=compute_log_prob,
+                    **kwargs,
+                )
+                outputs.append(out)
+
+            outputs = [o.to_dict() for o in outputs]
+            # Concatenate outputs
+            output = SDESchedulerOutput.from_dict({
+                k: torch.cat([o[k] for o in outputs], dim=0) if outputs[0][k] is not None else None
+                for k in outputs[0].keys()
+            })
+
+        else:
+            # T2I, can be batched
+            output = self._t2i_forward(
+                samples=samples,
+                timestep_index=timestep_index,
+                compute_log_prob=compute_log_prob,
+                **kwargs,
+            )
+
         return output

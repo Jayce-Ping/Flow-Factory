@@ -1,3 +1,17 @@
+# Copyright 2026 Jayce-Ping
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # src/flow_factory/utils/base.py
 import re
 import base64
@@ -13,6 +27,9 @@ from PIL import Image
 import torch
 import numpy as np
 from accelerate import Accelerator
+
+from .image import *
+from .video import *
 
 # ------------------------------------Function Utils-------------------------------------
 
@@ -97,178 +114,70 @@ def num_to_base_tuple(num, base, length):
         num //= base
     return tuple(result.tolist())
 
-# -------------------------------------Image Utils-------------------------------------
+# ----------------------------------- Hash Utils --------------------------------------
 
-def hash_pil_image(image: Image.Image) -> str:
+def hash_pil_image(image: Image.Image, size: Optional[int] = None) -> str:
     """
-        Generate a hash string for a PIL Image.
-        Args:
-            image (Image.Image): PIL Image object
-        Returns:
-            str: Hash string of the image
+    Generate a hash string for a PIL Image.
+    Args:
+        image: PIL Image object
+        size: Optional thumbnail size for faster hashing. None uses full image.
+    Returns:
+        str: MD5 hash hex string
     """
+    if size is not None:
+        image = image.copy()
+        image.thumbnail((size, size))
     return hashlib.md5(image.tobytes()).hexdigest()
 
-def pil_image_to_base64(image : Image.Image, format="JPEG") -> str:
+def hash_tensor(tensor: torch.Tensor, max_elements: int = 1024) -> str:
     """
-        Convert a PIL Image to a base64-encoded string.
-        Args:
-            image (Image.Image): PIL Image object
-            format (str): Image format, e.g., "JPEG", "PNG"
-        Returns:
-            base64 string of the image
+    Generate a hash string for a torch Tensor.
+    Args:
+        tensor: Input tensor
+        max_elements: Max elements to hash (for efficiency)
+    Returns:
+        str: MD5 hash hex string
     """
-    buffered = BytesIO()
-    image.save(buffered, format="JPEG")
-    encoded_image_text = base64.b64encode(buffered.getvalue()).decode("utf-8")
-    base64_image = f"data:image/{format.lower()};base64,{encoded_image_text}"
-    return base64_image
+    flat = tensor.detach().flatten()
+    n = flat.numel()
+    if n > max_elements:
+        step = n // max_elements
+        flat = flat[::step][:max_elements]  # stride sampling
+    return hashlib.md5(flat.cpu().numpy().tobytes()).hexdigest()
 
-def pil_image_to_tensor(image: Union[Image.Image, List[Image.Image]]) -> torch.Tensor:
+def hash_pil_image_list(images: List[Image.Image], size: int = 32) -> str:
     """
-        Convert a PIL Image or a list of PIL Images to a torch Tensor.
-        Args:
-            image (Union[Image.Image, List[Image.Image]]): PIL Image object or list of PIL Image objects
-        Returns:
-            torch.Tensor: Image tensor of shape (N, C, H, W), where N is the number of images. N=1 if input is a single image.
+    Generate a combined hash for a list of PIL Images.
+    Args:
+        images: List of PIL Image objects
+        size: Thumbnail size per image
+    Returns:
+        str: Combined MD5 hash hex string
     """
-    if isinstance(image, Image.Image):
-        image = [image]
-    
-    tensors = []
-    for img in image:
-        img_array = np.array(img).astype(np.float32) / 255.0  # Normalize to [0, 1]
-        if img_array.ndim == 2:  # Grayscale image
-            img_array = np.stack([img_array] * 3, axis=-1)  # Convert to RGB by duplicating channels
-        elif img_array.shape[2] == 4:  # RGBA image
-            img_array = img_array[:, :, :3]  # Discard alpha channel
-        img_tensor = torch.from_numpy(img_array).permute(2, 0, 1)  # HWC to CHW
-        tensors.append(img_tensor)
-    
-    return torch.stack(tensors, dim=0) # Stack to (N, C, H, W)
+    hasher = hashlib.md5()
+    for img in images:
+        hasher.update(hash_pil_image(img, size=size).encode())
+    return hasher.hexdigest()
 
-
-def tensor_to_pil_image(tensor: torch.Tensor) -> List[Image.Image]:
+def hash_tensor_list(tensors: List[torch.Tensor], max_elements_per_tensor: int = 1024) -> str:
     """
-        Convert a torch Tensor to a list of PIL Images.
-        Args:
-            tensor (torch.Tensor): Image tensor of shape (C, H, W) or (N, C, H, W)
-        Returns:
-            images (List[Image.Image]): list of PIL Image objects. If input is (C, H, W), returns a list with one image.
+    Generate a combined hash for a list of torch Tensors.
+    Args:
+        tensors: List of input tensors
+        max_elements_per_tensor: Max elements to hash per tensor for efficiency
+    Returns:
+        str: Combined MD5 hash hex string
     """
-    if len(tensor.shape) == 3:
-        tensor = tensor.unsqueeze(0)
-    
-    images = (tensor * 255).round().clamp(0, 255).to(torch.uint8).cpu().numpy()
-    images = images.transpose(0, 2, 3, 1)  # NCHW -> NHWC
-    images = [Image.fromarray(image) for image in images]
-    images = images
-    return images
+    hasher = hashlib.md5()
+    for tensor in tensors:
+        # Compute individual hash using your existing hash_tensor function
+        t_hash = hash_tensor(tensor, max_elements=max_elements_per_tensor)
+        # Update the master hasher with this tensor's hash
+        hasher.update(t_hash.encode())
+    return hasher.hexdigest()
 
-def numpy_to_pil_image(array: np.ndarray) -> List[Image.Image]:
-    """
-        Convert a NumPy array to a list of PIL Images.
-        Args:
-            array (np.ndarray): Image array of shape (C, H, W) or (N, C, H, W)
-        Returns:
-            images (List[Image.Image]): list of PIL Image objects. If input is (C, H, W), returns a list with one image.
-        1. If the input array has shape (C, H, W), it is treated as a single image and converted to (1, C, H, W).
-        2. The pixel values are assumed to be in the range [0, 1] or [0, 255]. If the maximum value is less than or equal to 1.0, the values are scaled to [0, 255].
-        3. The array is clipped to ensure all values are within [0, 255] and converted to uint8.
-    """
-    if len(array.shape) == 3:
-        array = array[np.newaxis, ...]
-    
-    # Clip and convert to uint8
-    if array.max() <= 1.0:
-        array = (array * 255).round()
-    array = np.clip(array, 0, 255).astype(np.uint8)
-
-    # Convert from NCHW to NHWC if needed
-    if array.shape[1] == 3:  # NCHW format
-        array = array.transpose(0, 2, 3, 1)  # NCHW -> NHWC
-
-    images = [Image.fromarray(image) for image in array]
-    images = images
-    return images
-
-
-def tensor_list_to_pil_image(tensor_list: List[torch.Tensor]) -> List[Image.Image]:
-    """
-        Convert a list of torch Tensors to a list of PIL Images.
-        Args:
-            tensor_list (List[torch.Tensor]): list of image tensors, each of shape (C, H, W) or (1, C, H, W). Each tensor can have different shape but same dimension.
-        Returns:
-            images (List[Image.Image]): list of PIL Image objects
-        Note:
-            If the input tensors have different shapes, they will be processed individually.
-    """
-    if not tensor_list:
-        return []
-
-    # If all image tensors have the same shape, stack them directly
-    if all(tensor.shape == tensor_list[0].shape for tensor in tensor_list):
-        batch = torch.stack([
-            t if t.dim() == 3 else t.squeeze(0)
-            for t in tensor_list
-        ], dim=0)
-        # Normalize, to uint8
-        batch = (batch * 255).round().clamp(0, 255).to(torch.uint8).cpu().numpy()
-        # NCHW -> NHWC
-        if batch.shape[1] == 3:
-            batch = batch.transpose(0, 2, 3, 1)
-        return [Image.fromarray(img) for img in batch]
-    else:
-        # Process each tensor individually
-        images = []
-        for t in tensor_list:
-            if t.dim() == 4 and t.shape[0] == 1:
-                t = t.squeeze(0)
-            img = (t * 255).round().clamp(0, 255).to(torch.uint8).cpu().numpy()
-            if img.shape[0] == 3:
-                img = img.transpose(1, 2, 0)  # CHW -> HWC
-            images.append(Image.fromarray(img))
-        return images
-
-def numpy_list_to_pil_image(numpy_list: List[np.ndarray]) -> List[Image.Image]:
-    """
-        Convert a list of NumPy arrays to a list of PIL Images.
-        Args:
-            numpy_list (List[np.ndarray]): list of image arrays, each of shape (C, H, W) or (1, C, H, W). Each array can have different shape but same dimension.
-        Returns:
-            images (List[Image.Image]): list of PIL Image objects
-        Note:
-            If the input arrays have different shapes, they will be processed individually.
-    """
-    if not numpy_list:
-        return []
-    # If all image arrays have the same shape, stack them directly
-    if all(arr.shape == numpy_list[0].shape for arr in numpy_list):
-        batch = np.stack([
-            arr if arr.ndim == 3 else arr.squeeze(0)
-            for arr in numpy_list
-        ], axis=0)
-        # Normalize, to uint8
-        if batch.max() <= 1.0:
-            batch = (batch * 255).round()
-        batch = np.clip(batch, 0, 255).astype(np.uint8)
-        # NCHW -> NHWC
-        if batch.shape[1] == 3:
-            batch = batch.transpose(0, 2, 3, 1)
-        return [Image.fromarray(img) for img in batch]
-    else:
-        # Process each array individually
-        images = []
-        for arr in numpy_list:
-            if arr.ndim == 4 and arr.shape[0] == 1:
-                arr = arr.squeeze(0)
-            if arr.max() <= 1.0:
-                arr = (arr * 255).round()
-            arr = np.clip(arr, 0, 255).astype(np.uint8)
-            if arr.shape[0] == 3:
-                arr = arr.transpose(1, 2, 0)  # CHW -> HWC
-            images.append(Image.fromarray(arr))
-        return images
+# ------------------------------------ Grid Latents --------------------------------------------
 
 def divide_latents(latents: torch.Tensor, H: int, W: int, h: int, w: int) -> torch.Tensor:
     """
@@ -384,3 +293,15 @@ def to_broadcast_tensor(value : Union[int, float, List[int], List[float], torch.
 
     # Adjust shape for broadcasting
     return value.view(-1, *([1] * (len(ref_tensor.shape) - 1)))
+
+
+
+def is_tensor_list(tensor_list: List[torch.Tensor]) -> bool:
+    """
+    Check if the input is a list of torch Tensors.
+    Args:
+        tensor_list (List[torch.Tensor]): list to check
+    Returns:
+        bool: True if all elements are torch Tensors, False otherwise
+    """
+    return isinstance(tensor_list, list) and all(isinstance(t, torch.Tensor) for t in tensor_list)

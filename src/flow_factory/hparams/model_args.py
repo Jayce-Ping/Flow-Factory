@@ -1,3 +1,17 @@
+# Copyright 2026 Jayce-Ping
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # src/flow_factory/hparams/model_args.py
 import os
 import math
@@ -8,8 +22,6 @@ from .abc import ArgABC
 import logging
 
 import torch
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s')
-logger = logging.getLogger(__name__)
 
 dtype_map = {
     'fp16': torch.float16,
@@ -35,18 +47,17 @@ class ModelArguments(ArgABC):
     )
 
     master_weight_dtype : Union[Literal['fp32', 'bf16', 'fp16', 'float16', 'bfloat16', 'float32'], torch.dtype] = field(
-        default='float32',
+        default='bfloat16',
         metadata={'help': "The dtype of master weight for full-parameter traing."}
     )
 
+    target_components : Union[str, List[str]] = field(
+        default='transformer',
+        metadata={"help": "Which components to fine-tune. Options are like ['transformer', 'transformer_2', ['transformer', 'transformer_2']]"}
+    )
     target_modules : Union[str, List[str]] = field(
         default='all',
         metadata={"help": "Which layers to fine-tune. Options are like ['all',  'default', 'to_q', ['to_q', 'to_k', 'to_v']]"}
-    )
-
-    resume_path : Optional[str] = field(
-        default=None,
-        metadata={"help": "Resume from checkpoint directory."}
     )
 
     model_type: Literal["sd3", "flux1", "flux1-kontext", 'flux2', 'qwenimage', 'qwenimage-edit', 'z-image'] = field(
@@ -64,9 +75,24 @@ class ModelArguments(ArgABC):
         metadata={"help": "Alpha scaling factor for LoRA adapters. Default to `2 * lora_rank` if None."},
     )
 
+    resume_path : Optional[str] = field(
+        default=None,
+        metadata={"help": "Resume from checkpoint directory."}
+    )
+
+    resume_training_state : bool = field(
+        default=False,
+        metadata={"help": "Whether to resume training state, only effective when resume_path is a directory with full checkpoint."}
+    )
+
     def __post_init__(self):        
         if isinstance(self.master_weight_dtype, str):
             self.master_weight_dtype = dtype_map[self.master_weight_dtype]
+
+        # Normalize target_components to list
+        if isinstance(self.target_components, str):
+            self.target_components = [self.target_components]
+
 
         if isinstance(self.target_modules, str):
             if self.target_modules not in ['all', 'default']:
@@ -74,6 +100,8 @@ class ModelArguments(ArgABC):
 
         if self.lora_alpha is None:
             self.lora_alpha = 2 * self.lora_rank
+
+        self.resume_path = os.path.expanduser(self.resume_path) if self.resume_path is not None else None
 
     def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()

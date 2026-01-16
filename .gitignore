@@ -1,15 +1,42 @@
-# pycache
-
 logs/
+swanlog/
+wandb/
+runs/
+tensorboard/
+*out
+*.log
+*.err
+.cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
-*.log
-
 *.egg-info/
+*debug/
 
 .DS_Store
 
 *.ipynb
+.vscode
 
+# gitattributes in dataset
+dataset/**/.gitattributes
+
+# Image data
+dataset/**/image/
+dataset/**/image*
+dataset/**/images/
+dataset/**/images*
+dataset/**/*.jpg
+dataset/**/*.png
+dataset/**/*.jpeg
+
+
+# Video data
+dataset/**/video/
+dataset/**/videos/
+dataset/**/video*
+dataset/**/videos*
+dataset/**/*.mp4
+dataset/**/*.avi
+dataset/**/*.mov

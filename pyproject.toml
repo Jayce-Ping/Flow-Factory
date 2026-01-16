@@ -43,6 +43,7 @@ dependencies = [
     "sentencepiece>=0.2.1",
 
     # Basic Utils
+    "imageio[ffmpeg]>=2.37.2",
     "numpy>=1.26.4",
     "pillow>=10.4.0",
     "einops>=0.8.0",
@@ -54,7 +55,7 @@ dependencies = [
 [project.optional-dependencies]
 # DeepSpeed (ZeRO optimization)
 deepspeed = [
-    "deepspeed>=0.15.4,<=0.17.4",
+    "deepspeed==0.15.4",
 ]
 
 # Quantization (8-bit/4-bit)

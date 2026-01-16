@@ -1,3 +1,17 @@
+# Copyright 2026 Jayce-Ping
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # src/flow_factory/rewards/abc.py
 """
 Abstract Base Class for Reward Models
@@ -31,15 +45,13 @@ class RewardModelOutput(BaseOutput):
 
 
 
-class BaseRewardModel(ABC, nn.Module):
+class BaseRewardModel(ABC):
     """
     Abstract base class for reward models.
     
     Subclasses must implement the `forward` method. 
-    This class handles DeepSpeed ZeRO-3 parameter gathering and no_grad contexts automatically.
     """
-    model : nn.Module
-    def __init__(self, config: Arguments, accelerator : Accelerator):
+    def __init__(self, config: RewardArguments, accelerator : Accelerator):
         """
         Args:
             config: Configuration object containing `reward_args`.
@@ -47,28 +59,14 @@ class BaseRewardModel(ABC, nn.Module):
         """
         super().__init__()
         self.accelerator = accelerator
-        reward_args = config.reward_args
-        self.reward_args = reward_args
-        self.device = self.accelerator.device if reward_args.device == torch.device('cuda') else reward_args.device
-        self.dtype = reward_args.dtype
+        self.config = config
+        self.device = self.accelerator.device if config.device == torch.device('cuda') else config.device
+        self.dtype = config.dtype
+        self.model = None  # To be defined in subclasses
 
-    def __call__(self, *args, **kwargs):
-        """
-        Wraps `forward` to automatically handle `torch.no_grad` and other contexts.
-        """
-        with torch.no_grad():
-            return super().__call__(*args, **kwargs)
-
-    
     @abstractmethod
-    def forward(self, **kwargs) -> Union[RewardModelOutput, torch.Tensor, np.ndarray, List[float]]:
+    def __call__(self, *args, **kwargs) -> Union[torch.Tensor, RewardModelOutput]:
         """
-        Compute rewards for the given inputs.
-        
-        Args:
-            **inputs: Model-specific inputs (e.g., pixel_values, input_ids).
-            
-        Returns:
-            The computed rewards in the specified format.
+        Implement the forward pass of the reward model.
         """
         pass
