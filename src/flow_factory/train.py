@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# flow_factory/train.py
+# src/flow_factory/train.py
 import os
 import argparse
 import logging

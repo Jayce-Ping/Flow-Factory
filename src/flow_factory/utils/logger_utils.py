@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# src/flow_factory/utils/logger.py
+# src/flow_factory/utils/logger_utils.py
 import os
 import logging
 import torch

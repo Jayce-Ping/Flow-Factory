@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# src/flow_factory/ema/__init__.py
+
 from .ema import EMAModuleWrapper
 
 __all__ = ["EMAModuleWrapper"]
