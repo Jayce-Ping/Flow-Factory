@@ -246,7 +246,7 @@ class RewardProcessor:
                 output = model(**group_input)
                 group_rewards = torch.as_tensor(
                     output.rewards if hasattr(output, 'rewards') else output,
-                    dtype=torch.float32
+                    device='cpu', dtype=torch.float32,
                 )
                 
                 # Assign to correct positions
