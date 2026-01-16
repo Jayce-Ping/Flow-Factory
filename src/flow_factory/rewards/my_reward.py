@@ -94,7 +94,7 @@ class MyGroupwiseRewardModel(GroupwiseRewardModel):
         condition_videos: Optional[List[Union[List[List[Image.Image]], torch.Tensor]]] = None,
     ) -> RewardModelOutput:
         """
-        Compute rewards for given prompts and images.
+        Compute rewards for given prompts and images within a group. You should handle `self.config.batch_size` by yourself here.
         Args:
             prompt (list[str]): List of text prompts. The length is equal to `group_size`.
             image (list[Image.Image]): List of generated images corresponding to the prompts. The length is equal to `group_size`.
