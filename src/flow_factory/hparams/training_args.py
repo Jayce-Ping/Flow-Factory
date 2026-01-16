@@ -179,8 +179,8 @@ class TrainingArguments(ArgABC):
          default=0,
             metadata={"help": "KL penalty beta for PPO/GRPO."},
     )
-    ref_param_device : Literal["cpu", "same_as_model"] = field(
-        default="same_as_model",
+    ref_param_device : Literal["cpu", "cuda"] = field(
+        default="cuda",
         metadata={"help": "Device to store reference model parameters."},
     )
 
@@ -238,7 +238,12 @@ class TrainingArguments(ArgABC):
 
     ema_update_interval: int = field(
         default=10,
-        metadata={"help": "Update EMA every N steps."},
+        metadata={"help": "Update EMA every N epochs."},
+    )
+
+    ema_device: Literal["cpu", "cuda"] = field(
+        default="cuda",
+        metadata={"help": "Device to store EMA model."},
     )
 
     def __post_init__(self):

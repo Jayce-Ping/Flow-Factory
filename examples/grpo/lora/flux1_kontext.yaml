@@ -57,6 +57,11 @@ train:
   adv_clip_range: 5.0  # Advantage clipping range
   max_grad_norm: 1.0  # Max gradient norm for clipping
   
+  # KL div
+  kl_type: 'x-based' # Options: 'x-based', 'v-based'
+  kl_beta: 0 # KL divergence beta, 0 to disable
+  ref_param_device: 'cuda' # Options: cpu, cuda
+
   # Denoising process
   num_inference_steps: 8  # Number of timesteps
   guidance_scale: 2.5  # Guidance scale for sampling
@@ -71,6 +76,7 @@ train:
   # EMA
   ema_decay: 0.9  # EMA decay rate (0 to disable)
   ema_update_interval: 4  # EMA update interval (in epochs)
+  ema_device: "cuda"  # Device to store EMA model (options: cpu, cuda)
 
 # Scheduler Configuration
 scheduler:

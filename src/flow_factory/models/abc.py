@@ -446,11 +446,16 @@ class BaseAdapter(ABC):
     def _init_ema(self):
         """Initialize EMA wrapper for the transformer."""
         if self.training_args.ema_decay > 0:
+            ema_device = (
+                self.accelerator.device 
+                if self.training_args.ema_device == "cuda" 
+                else torch.device("cpu")
+            )
             self.ema_wrapper = EMAModuleWrapper(
                 parameters=self.get_trainable_parameters(),
                 decay=self.training_args.ema_decay,
                 update_step_interval=self.training_args.ema_update_interval,
-                device=self.device,
+                device=ema_device,
             )
         else:
             self.ema_wrapper = None
@@ -483,7 +488,11 @@ class BaseAdapter(ABC):
             self.training_args.kl_beta > 0.0
             and self.model_args.finetune_type in ['full']
         ):
-            ref_param_device = self.accelerator.device if self.training_args.ref_param_device == 'same_as_model' else torch.device(self.training_args.ref_param_device)
+            ref_param_device = (
+                self.accelerator.device 
+                if self.training_args.ref_param_device == "cuda" 
+                else torch.device("cpu")
+            )
             self._ref_ema = EMAModuleWrapper(
                 parameters=self.get_trainable_parameters(),
                 decay=0.0,  # No decay,
@@ -1210,11 +1219,12 @@ class BaseAdapter(ABC):
             with open(save_index_file, "w", encoding="utf-8") as f:
                 content = json.dumps(index, indent=2, sort_keys=True) + "\n"
                 f.write(content)
-            logger.info(
-                f"The model is bigger than the maximum size per checkpoint ({max_shard_size}) and is going to be "
-                f"split in {len(state_dict_split.filename_to_tensors)} checkpoint shards. You can find where each parameters has been saved in the "
-                f"index located at {save_index_file}."
-            )
+            if self.accelerator.is_main_process:
+                logger.info(
+                    f"The model is bigger than the maximum size per checkpoint ({max_shard_size}) and is going to be "
+                    f"split in {len(state_dict_split.filename_to_tensors)} checkpoint shards. You can find where each parameters has been saved in the "
+                    f"index located at {save_index_file}."
+                )
         else:
             path_to_weights = os.path.join(save_directory, weights_name)
             if self.accelerator.is_main_process:
