@@ -27,7 +27,7 @@ from accelerate import Accelerator
 from diffusers.pipelines.wan.pipeline_wan_i2v import WanImageToVideoPipeline, prompt_clean
 from peft import PeftModel
 
-from ..adapter import BaseAdapter
+from ..abc import BaseAdapter
 from ..samples import I2VSample
 from ...hparams import *
 from ...scheduler import UniPCMultistepSDESchedulerOutput, UniPCMultistepSDEScheduler

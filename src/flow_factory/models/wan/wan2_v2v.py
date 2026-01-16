@@ -28,7 +28,7 @@ from PIL import Image
 from accelerate import Accelerator
 from peft import PeftModel
 
-from ..adapter import BaseAdapter
+from ..abc import BaseAdapter
 from ..samples import V2VSample
 from ...hparams import *
 from ...scheduler import UniPCMultistepSDESchedulerOutput, UniPCMultistepSDEScheduler

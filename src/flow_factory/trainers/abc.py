@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# src/flow_factory/trainers/trainer.py
+# src/flow_factory/trainers/abc.py
 import os
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple, List, Union
@@ -28,7 +28,7 @@ from accelerate import Accelerator
 from accelerate.utils import set_seed, ProjectConfiguration
 
 from ..hparams import *
-from ..models.adapter import BaseAdapter
+from ..models.abc import BaseAdapter
 from ..data_utils.loader import get_dataloader
 from ..rewards import load_reward_model, BaseRewardModel, MultiRewardLoader, RewardProcessor
 from ..logger import load_logger

@@ -28,7 +28,7 @@ from accelerate import Accelerator
 from diffusers.pipelines.wan.pipeline_wan import WanPipeline, prompt_clean
 from peft import PeftModel
 
-from ..adapter import BaseAdapter
+from ..abc import BaseAdapter
 from ..samples import T2VSample
 from ...hparams import *
 from ...scheduler import UniPCMultistepSDESchedulerOutput, UniPCMultistepSDEScheduler

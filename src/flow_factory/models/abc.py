@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# src/flow_factory/models/adapter.py
+# src/flow_factory/models/abc.py
 import os
 import re
 import json
