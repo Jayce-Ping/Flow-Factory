@@ -62,7 +62,7 @@ train:
   ref_param_device: 'cuda' # Options: cpu, cuda
 
   # Denoising process
-  num_inference_steps: 10  # Number of timesteps
+  num_inference_steps: 8  # Number of timesteps
   guidance_scale: 4.0  # Guidance scale for sampling
   
   # Optimization
