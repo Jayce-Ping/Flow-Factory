@@ -333,7 +333,7 @@ class QwenImageEditPlusAdapter(BaseAdapter):
             "condition_image_sizes": condition_image_sizes, # List[Tuple[int, int]]
             "vae_images": vae_images, # List[tensor(1, C, 1, H, W)]
             "vae_image_sizes": vae_image_sizes, # List[Tuple[int, int]]
-            'image_latents': image_latents, # tensor(B, seq_len_total, C) C = 64 here
+            'image_latents': image_latents, # tensor(1, seq_len_total, C)
         }
         
     def encode_image(
@@ -357,7 +357,7 @@ class QwenImageEditPlusAdapter(BaseAdapter):
             Dictionary containing:
                 - "condition_images": Nested list of resized conditioning images.
                 - "condition_image_sizes": Nested list of sizes for conditioning images.
-                - "vae_images": Ne
+                - "vae_images": Nested list of VAE image tensors.
                 - "vae_image_sizes": List of sizes for VAE images.
                 - "image_latents": batch of packed image latents
         """
@@ -534,7 +534,9 @@ class QwenImageEditPlusAdapter(BaseAdapter):
                 max_sequence_length=max_sequence_length,
             )
             for k, v in encoded_prompts.items():
-                results[k].append(v)
+                if isinstance(v, torch.Tensor):
+                    v = list(v.unbind(0)) # Convert to a list for ragged case
+                results[k].extend(v)
 
         return results
 
@@ -645,7 +647,6 @@ class QwenImageEditPlusAdapter(BaseAdapter):
 
         # Callback arguments
         extra_call_back_kwargs: List[str] = [],
-        **kwargs,
     ):
         """Generate images using Qwen-Image-Edit Plus model."""
         # 1. Set up
@@ -935,28 +936,24 @@ class QwenImageEditPlusAdapter(BaseAdapter):
         height: int = 1024,
         width: int = 1024,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-
         # Prompt encoding arguments
         prompt_ids: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
         prompt_embeds: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
         prompt_embeds_mask: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
         negative_prompt_ids: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
         negative_prompt_embeds: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
-        negative_prompt_embeds_mask: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
-        
+        negative_prompt_embeds_mask: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,        
         # Image encoding arguments
         condition_images: Optional[List[QwenImageEditPlusImageInput]] = None, # A batch of condition image lists
         condition_image_sizes: Optional[List[List[Tuple[int, int]]]] = None, # A batch of condition image size lists
         vae_images: Optional[List[QwenImageEditPlusImageInput]] = None, # A batch of VAE image lists
         vae_image_sizes: Optional[List[List[Tuple[int, int]]]] = None, # A batch of VAE image size lists
         image_latents: Optional[List[torch.Tensor]] = None, # A batch of image latents
-
         # Other arguments
         extra_call_back_kwargs: List[str] = [],
         attention_kwargs: Optional[Dict[str, Any]] = {},
         max_sequence_length: int = 1024,
         compute_log_prob: bool = False,
-        **kwargs,
     ):
         """
         Batch inference, the input must be in the batch format
@@ -978,68 +975,38 @@ class QwenImageEditPlusAdapter(BaseAdapter):
             len(condition_images) if condition_images is not None else
             len(vae_images) if vae_images is not None else 1
         )
-        
-        def _get_default_batch_value(v):
-            return v if v is not None else [None] * batch_size
-        
-        # Prompt
-        prompt = _get_default_batch_value(prompt)
-        prompt_ids = _get_default_batch_value(prompt_ids)
-        prompt_embeds = _get_default_batch_value(prompt_embeds)
-        prompt_embeds_mask = _get_default_batch_value(prompt_embeds_mask)
-        # Negative Prompt
-        negative_prompt = _get_default_batch_value(negative_prompt)
-        negative_prompt_ids = _get_default_batch_value(negative_prompt_ids)
-        negative_prompt_embeds = _get_default_batch_value(negative_prompt_embeds)
-        negative_prompt_embeds_mask = _get_default_batch_value(negative_prompt_embeds_mask)
-        # Images
-        images = _get_default_batch_value(images)
-        condition_images = _get_default_batch_value(condition_images)
-        condition_image_sizes = _get_default_batch_value(condition_image_sizes)
-        vae_images = _get_default_batch_value(vae_images)
-        vae_image_sizes = _get_default_batch_value(vae_image_sizes)
-        image_latents = _get_default_batch_value(image_latents)
-        for (
-            img_list, p, neg_p,
-            p_ids, p_embeds, p_embeds_mask,
-            neg_p_ids, neg_p_embeds, neg_p_embeds_mask,
-            cond_imgs, cond_img_sizes, vae_imgs, vae_img_sizes, img_latents
-        ) in zip(
-            images, prompt, negative_prompt,
-            prompt_ids, prompt_embeds, prompt_embeds_mask,
-            negative_prompt_ids, negative_prompt_embeds, negative_prompt_embeds_mask,
-            condition_images, condition_image_sizes, vae_images, vae_image_sizes, image_latents
-        ):
+
+        for b in range(batch_size):
             sample = self._inference(
-                # Ordinary arguments
-                images=img_list,
-                prompt=p,
-                negative_prompt=neg_p,
+                # Extract b-th element from each parameter - be careful to tensors shape.
+                # Ordinary Args
+                images=images[b],
+                prompt=prompt[b] if isinstance(prompt, list) else prompt,
+                negative_prompt=negative_prompt[b] if isinstance(negative_prompt, list) else negative_prompt,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
                 height=height,
                 width=width,
                 generator=generator,
-                # Prompt encoding arguments
-                prompt_ids=p_ids,
-                prompt_embeds=p_embeds,
-                prompt_embeds_mask=p_embeds_mask,
-                # Negative prompt encoding arguments
-                negative_prompt_ids=neg_p_ids,
-                negative_prompt_embeds=neg_p_embeds,
-                negative_prompt_embeds_mask=neg_p_embeds_mask,
-                # Conditioning images encoding arguments
-                condition_images=cond_imgs,
-                condition_image_sizes=cond_img_sizes,
-                vae_images=vae_imgs,
-                vae_image_sizes=vae_img_sizes,
-                image_latents=img_latents,
-                # Other arguments
                 attention_kwargs=attention_kwargs,
                 max_sequence_length=max_sequence_length,
+                # Encoded prompt
+                prompt_ids=prompt_ids[b:b+1] if prompt_ids is not None else None,
+                prompt_embeds=prompt_embeds[b:b+1] if prompt_embeds is not None else None,
+                prompt_embeds_mask=prompt_embeds_mask[b:b+1] if prompt_embeds_mask is not None else None,
+                # Encoded negative prompt
+                negative_prompt_ids=negative_prompt_ids[b:b+1] if negative_prompt_ids is not None else None,
+                negative_prompt_embeds=negative_prompt_embeds[b:b+1] if negative_prompt_embeds is not None else None,
+                negative_prompt_embeds_mask=negative_prompt_embeds_mask[b:b+1] if negative_prompt_embeds_mask is not None else None,
+                # Encoded images
+                condition_images=condition_images[b] if condition_images is not None else None,
+                condition_image_sizes=condition_image_sizes[b] if condition_image_sizes is not None else None,
+                vae_images=vae_images[b] if vae_images is not None else None,
+                vae_image_sizes=vae_image_sizes[b] if vae_image_sizes is not None else None,
+                image_latents=image_latents[b] if image_latents is not None else None,
+                # Shared parameters
                 compute_log_prob=compute_log_prob,
                 extra_call_back_kwargs=extra_call_back_kwargs,
-                **kwargs,
             )
             all_samples.extend(sample)
 
