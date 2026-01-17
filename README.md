@@ -19,6 +19,8 @@ We have added the latest FLUX2-Klein series! Follow the commands to start:
 # Clone the repo with submodule `diffusers`
 git clone --recursive https://github.com/X-GenGroup/Flow-Factory.git
 cd Flow-Factory
+# Fetch the source code of `diffusers==0.37.0.dev`
+git submodule update --init --recursive
 # Install `diffusers==0.37.0.dev`
 cd diffusers
 pip install -e .
