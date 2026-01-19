@@ -48,6 +48,8 @@ from ..utils.base import (
 )
 from ..utils.logger_utils import setup_logger
 
+logger = setup_logger(__name__)
+
 
 __all__ = [
     'BaseSample',
@@ -288,6 +290,10 @@ class BaseSample:
         if not values:
             return values
         
+        # All are None - return None
+        if all(v is None for v in values):
+            return None
+
         first = values[0]
         
         # 1. Shared fields - take first element only
@@ -336,10 +342,11 @@ class BaseSample:
         if not samples:
             raise ValueError("No samples to stack.")
         
+        sample_cls = type(samples[0]) # Dynamically use the sample's class
         sample_dicts = [s.to_dict() for s in samples]
         
         return {
-            key: cls._stack_values(key, [d[key] for d in sample_dicts])
+            key: sample_cls._stack_values(key, [d[key] for d in sample_dicts])
             for key in sample_dicts[0].keys()
         }
 
@@ -348,7 +355,6 @@ class BaseSample:
 class ImageConditionSample(BaseSample):
     """Sample for tasks with image conditions."""
     _id_fields : ClassVar[frozenset[str]] = BaseSample._id_fields | frozenset({'condition_images'})
-    _stackable_fields: ClassVar[frozenset[str]] = frozenset({'condition_images'})
 
     condition_images : Optional[ImageBatch] = None # A list of (Image.Image | torch.Tensor | np.ndarray) or a batched tensor/array
     # `condition_images` will be convert to a list of tensors of shape (C, H, W) for canonicalization.
@@ -374,12 +380,9 @@ class ImageConditionSample(BaseSample):
         if self.condition_images is not None:
             cond_images = standardize_image_batch(
                 self.condition_images,
-                output_type='pt'
+                output_type='pil'
             )
-            if isinstance(cond_images, list):
-                hasher.update(hash_tensor_list(cond_images).encode())
-            else:
-                hasher.update(hash_tensor(cond_images).encode())
+            hasher.update(hash_pil_image_list(cond_images).encode())
         
         return int.from_bytes(hasher.digest()[:8], byteorder='big', signed=True)
 
@@ -387,7 +390,6 @@ class ImageConditionSample(BaseSample):
 class VideoConditionSample(BaseSample):
     """Sample for tasks with video conditions."""
     _id_fields : ClassVar[frozenset[str]] = BaseSample._id_fields | frozenset({'condition_videos'})
-    _stackable_fields: ClassVar[frozenset[str]] = frozenset({'condition_videos'})
 
     condition_videos: Optional[VideoBatch] = None # A list of (List[Image.Image] | torch.Tensor | np.ndarray) or a batched tensor/array
     # `condition_videos` will be convert to a list of tensors of shape (T, C, H, W) for canonicalization.
@@ -413,12 +415,10 @@ class VideoConditionSample(BaseSample):
         if self.condition_videos is not None:
             cond_videos = standardize_video_batch(
                 self.condition_videos,
-                output_type='pt'
+                output_type='pil'
             )
-            if isinstance(cond_videos, list):
-                hasher.update(hash_tensor_list(cond_videos).encode())
-            else:
-                hasher.update(hash_tensor(cond_videos).encode())
+            for v in cond_videos:
+                hasher.update(hash_pil_image_list(v).encode())
         
         return int.from_bytes(hasher.digest()[:8], byteorder='big', signed=True)
 

@@ -30,7 +30,7 @@ import logging
 from ..abc import BaseAdapter
 from ..samples import I2ISample
 from ...hparams import *
-from ...scheduler import FlowMatchEulerDiscreteSDEScheduler, SDESchedulerOutput, set_scheduler_timesteps
+from ...scheduler import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput, SDESchedulerOutput, set_scheduler_timesteps
 from ...utils.base import (
     filter_kwargs,
     is_pil_image_batch_list,
@@ -266,7 +266,7 @@ class Flux2Adapter(BaseAdapter):
         return {
             'condition_images': condition_image_tensors,  # List[List[torch.Tensor(3, H, W)]]
             'image_latents': image_latents_list,          # List[torch.Tensor(1, seq_len, C)]
-            'image_latent_ids': image_latent_ids_list,    # List[torch.Tensor(1, seq_len)]
+            'image_latent_ids': image_latent_ids_list,    # List[torch.Tensor(1, seq_len, 3)]
         }
     
     def _resize_condition_images(
@@ -624,11 +624,11 @@ class Flux2Adapter(BaseAdapter):
             (
                 isinstance(image_latents, list) and len(image_latents) > 0
                 and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 3
-            ) # List[torch.Tensor : ndim=3]
+            ) # List[torch.Tensor : ndim=3 (B, seq_len, C)]
             or
             (
                 isinstance(image_latents, torch.Tensor) and image_latents.ndim == 4
-            ) # torch.Tensor : ndim=4
+            ) # torch.Tensor : ndim=4 (N, B, seq_len, C)
         )
         if not (is_ragged_images or is_ragged_image_latents):
             # Images are shared across the batch or just T2I
@@ -678,7 +678,7 @@ class Flux2Adapter(BaseAdapter):
                 width=width,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
-                generator=generator,
+                generator=generator[idx] if isinstance(generator, list) else generator,
                 # Encoded prompt
                 prompt_ids=prompt_ids[idx:idx+1] if prompt_ids is not None else None, # Keep batch dim as 1
                 prompt_embeds=prompt_embeds[idx:idx+1] if prompt_embeds is not None else None,
@@ -717,7 +717,7 @@ class Flux2Adapter(BaseAdapter):
         compute_log_prob: bool = True,
         return_kwargs: List[str] = ['noise_pred', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
         noise_level: Optional[float] = None,
-    ) -> SDESchedulerOutput:
+    ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
         """
         Core forward pass handling both T2I and I2I.
 
@@ -802,15 +802,24 @@ class Flux2Adapter(BaseAdapter):
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         compute_log_prob: bool = True,
         return_kwargs: List[str] = ['noise_pred', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
-    ) -> SDESchedulerOutput:
+    ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
         """
         General forward method handling both T2I and I2I, including ragged I2I batches.
         """
-        # Check if ragged I2I (List of tensors with different seq_len)
-        is_ragged = isinstance(image_latents, list)
+        # Check if I2I
+        is_batched_multi_image_latents = (
+            (
+                isinstance(image_latents, list) and len(image_latents) > 0
+                and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 3
+            ) # List[torch.Tensor : ndim=3 (B, seq_len, C)]
+            or
+            (
+                isinstance(image_latents, torch.Tensor) and image_latents.ndim == 4
+            ) # torch.Tensor : ndim=4 (B, 1, seq_len, C)
+        )
 
-        if not is_ragged:
-            # T2I or uniform I2I: call _forward() directly
+        if not is_batched_multi_image_latents:
+            # T2I: call _forward() directly
             return self._forward(
                 t=t,
                 t_next=t_next,
@@ -868,7 +877,7 @@ class Flux2Adapter(BaseAdapter):
 
         # Concatenate outputs along batch dimension
         outputs_dict = [o.to_dict() for o in outputs]
-        return SDESchedulerOutput.from_dict({
+        return FlowMatchEulerDiscreteSDESchedulerOutput.from_dict({
             k: torch.cat([o[k] for o in outputs_dict], dim=0) if outputs_dict[0][k] is not None else None
             for k in outputs_dict[0].keys()
         })

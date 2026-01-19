@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import os
-from typing import Union, List, Dict, Any, Optional, Tuple
+from typing import Union, List, Dict, Any, Optional, Tuple, ClassVar
 from dataclasses import dataclass
 from PIL import Image
 from collections import defaultdict
@@ -29,7 +29,7 @@ from diffusers.pipelines.z_image.pipeline_z_image import ZImagePipeline
 from ..abc import BaseAdapter
 from ..samples import T2ISample
 from ...hparams import *
-from ...scheduler import SDESchedulerOutput, set_scheduler_timesteps, FlowMatchEulerDiscreteSDEScheduler
+from ...scheduler import FlowMatchEulerDiscreteSDESchedulerOutput, set_scheduler_timesteps, FlowMatchEulerDiscreteSDEScheduler
 from ...utils.base import filter_kwargs
 from ...utils.logger_utils import setup_logger
 
@@ -38,7 +38,9 @@ logger = setup_logger(__name__)
 
 @dataclass
 class ZImageSample(T2ISample):
-    pass
+    # Class var
+    _shared_fields: ClassVar[frozenset[str]] = frozenset({})
+    # Obj var - no extra
 
 class ZImageAdapter(BaseAdapter):
     def __init__(self, config: Arguments, accelerator : Accelerator):
@@ -65,7 +67,7 @@ class ZImageAdapter(BaseAdapter):
         device: Optional[torch.device] = None,
         max_sequence_length: int = 512,
     ) -> Tuple[List[torch.FloatTensor], torch.LongTensor]:
-        device = device or self.device
+        device = device or self.text_encoder.device
 
         if isinstance(prompt, str):
             prompt = [prompt]
@@ -114,7 +116,7 @@ class ZImageAdapter(BaseAdapter):
         negative_prompt: Optional[Union[str, List[str]]] = None,
         max_sequence_length: int = 512,
     ) -> Dict[str, Union[List[torch.FloatTensor], torch.LongTensor]]:
-        device = device or self.device
+        device = device or self.text_encoder.device
         prompt = [prompt] if isinstance(prompt, str) else prompt
         prompt_embeds, prompt_ids = self._encode_prompt(
             prompt=prompt,
@@ -191,16 +193,13 @@ class ZImageAdapter(BaseAdapter):
         negative_prompt: Optional[Union[str, List[str]]] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[List[torch.FloatTensor]] = None,
-
         # CFG options
         cfg_normalization: bool = False,
         cfg_truncation: Optional[float] = 1.0,
-
         # Other parameters
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         max_sequence_length: int = 512,
         compute_log_prob: bool = True,
-
         # Extra callback arguments
         extra_call_back_kwargs: List[str] = [],
         **kwargs
@@ -257,78 +256,21 @@ class ZImageAdapter(BaseAdapter):
         
         for i, t in enumerate(timesteps):
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
-            timestep = t.expand(batch_size).to(latents.dtype)
-            timestep = (1000 - timestep) / 1000 # Z-Image uses reversed timesteps?
-            # Normalized time for time-aware config (0 at start, 1 at end)
-            t_norm = timestep[0].item()
+            t_next = timesteps[i + 1] if i + 1 < len(timesteps) else torch.tensor(0, device=device)
+            return_kwargs = list(set(['next_latents', 'log_prob', 'noise_pred'] + extra_call_back_kwargs))
 
-            if (
-                do_classifier_free_guidance
-                and cfg_truncation is not None
-                and float(cfg_truncation) <= 1
-                and t_norm > cfg_truncation
-            ):
-                current_guidance_scale = 0.0
-            else:
-                current_guidance_scale = guidance_scale
-
-            apply_cfg = do_classifier_free_guidance and current_guidance_scale > 0
-
-            if apply_cfg:
-                latents_typed = latents.to(self.pipeline.transformer.dtype)
-                latent_model_input = latents_typed.repeat(2, 1, 1, 1)
-                prompt_embeds_model_input = prompt_embeds + negative_prompt_embeds # List concatenation
-                timestep_model_input = timestep.repeat(2)
-            else:
-                latent_model_input = latents.to(self.pipeline.transformer.dtype)
-                prompt_embeds_model_input = prompt_embeds
-                timestep_model_input = timestep
-
-            latent_model_input = latent_model_input.unsqueeze(2)
-            latent_model_input_list = list(latent_model_input.unbind(dim=0))
-
-            model_out_list = self.transformer(
-                latent_model_input_list,
-                timestep_model_input,
-                prompt_embeds_model_input,
-                return_dict=False,
-            )[0]
-
-            if apply_cfg:
-                # Perform CFG
-                pos_out = model_out_list[:batch_size]
-                neg_out = model_out_list[batch_size:]
-
-                noise_pred = []
-                for j in range(batch_size):
-                    pos = pos_out[j].float()
-                    neg = neg_out[j].float()
-
-                    pred = pos + current_guidance_scale * (pos - neg)
-
-                    # Renormalization
-                    if cfg_normalization and float(cfg_normalization) > 0.0:
-                        ori_pos_norm = torch.linalg.vector_norm(pos)
-                        new_pos_norm = torch.linalg.vector_norm(pred)
-                        max_new_norm = ori_pos_norm * float(cfg_normalization)
-                        if new_pos_norm > max_new_norm:
-                            pred = pred * (max_new_norm / new_pos_norm)
-
-                    noise_pred.append(pred)
-
-                noise_pred = torch.stack(noise_pred, dim=0)
-            else:
-                noise_pred = torch.stack([t.float() for t in model_out_list], dim=0)
-
-            noise_pred = noise_pred.squeeze(2)
-            noise_pred = -noise_pred
-
-            # compute the previous noisy sample x_t -> x_t-1
-            output = self.scheduler.step(
-                noise_pred=noise_pred,
-                timestep=t,
+            output = self.forward(
+                t=t,
+                t_next=t_next,
                 latents=latents,
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                guidance_scale=guidance_scale,
+                cfg_normalization=cfg_normalization,
+                cfg_truncation=cfg_truncation,
                 compute_log_prob=compute_log_prob and current_noise_level > 0,
+                return_kwargs=return_kwargs,
+                noise_level=current_noise_level,
             )
 
             latents = output.next_latents.to(dtype)
@@ -338,13 +280,11 @@ class ZImageAdapter(BaseAdapter):
                 all_log_probs.append(output.log_prob)
 
             if extra_call_back_kwargs:
-                capturable = {'noise_pred': noise_pred, 'noise_levels': current_noise_level}
+                capturable = {'noise_level': current_noise_level}
                 for key in extra_call_back_kwargs:
                     if key in capturable and capturable[key] is not None:
-                        # First check in capturable dict
                         extra_call_back_res[key].append(capturable[key])
                     elif hasattr(output, key):
-                        # Then check in output
                         val = getattr(output, key)
                         if val is not None:
                             extra_call_back_res[key].append(val)
@@ -367,27 +307,20 @@ class ZImageAdapter(BaseAdapter):
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
                 timesteps=timesteps,
                 log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
-
                 # Generated image & metadata
                 height=height,
                 width=width,
                 image=images[b],
-
                 # Encoded prompt
                 prompt=prompt[b] if isinstance(prompt, list) else prompt,
                 prompt_ids=prompt_ids[b] if prompt_ids is not None else None,
                 prompt_embeds=prompt_embeds[b] if prompt_embeds is not None else None,
-
                 # Encoded negative prompt
                 negative_prompt=negative_prompt[b] if negative_prompt is not None else None,
                 negative_prompt_ids=negative_prompt_ids[b] if negative_prompt_ids is not None else None,
                 negative_prompt_embeds=negative_prompt_embeds[b] if negative_prompt_embeds is not None else None,
-
                 # Extra kwargs
                 extra_kwargs={
-                    'guidance_scale': guidance_scale,
-                    'cfg_truncation': cfg_truncation,
-                    'cfg_normalization': cfg_normalization,
                     **{k: v[b] for k, v in extra_call_back_res.items()}
                 },
             )
@@ -401,63 +334,85 @@ class ZImageAdapter(BaseAdapter):
     # ======================== Forward (Training) ========================
     def forward(
         self,
-        samples : List[ZImageSample],
-        timestep_index : int,
-        compute_log_prob : bool = True,
-        **kwargs
-    ) -> SDESchedulerOutput:
-        # 1. Extract data from samples
-        batch_size = len(samples)
-        device = self.device
-        guidance_scale = [s.extra_kwargs.get('guidance_scale', self.training_args.guidance_scale) for s in samples]
-        do_classifier_free_guidance = guidance_scale[0] > 0.0
-        cfg_truncation = samples[0].extra_kwargs.get('cfg_truncation', 1.0)
-        cfg_normalization = samples[0].extra_kwargs.get('cfg_normalization', False)
+        t: torch.Tensor,
+        t_next: torch.Tensor,
+        latents: torch.Tensor,
+        prompt_embeds: List[torch.FloatTensor],
+        # Optional for CFG
+        negative_prompt_embeds: Optional[List[torch.FloatTensor]] = None,
+        guidance_scale: float = 5.0,
+        cfg_normalization: bool = False,
+        cfg_truncation: Optional[float] = 1.0,
+        # Other
+        next_latents: Optional[torch.Tensor] = None,
+        noise_level: Optional[float] = None,
+        compute_log_prob: bool = True,
+        return_kwargs: List[str] = ['noise_pred', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
+    ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
+        """
+        Core forward pass for T2I generation.
 
-        latents = torch.stack([s.all_latents[timestep_index] for s in samples], dim=0).to(device)
-        next_latents = torch.stack([s.all_latents[timestep_index + 1] for s in samples], dim=0).to(device)
-        timestep = torch.stack([s.timesteps[timestep_index] for s in samples], dim=0).to(device)
-        num_inference_steps = len(samples[0].timesteps)
-        t = (1000 - timestep) / 1000 # Z-Image uses reversed timesteps
-        t_norm = t[0].item()
+        Args:
+            t: Current timestep tensor.
+            t_next: Next timestep tensor.
+            latents: Current latent representations (B, C, H, W).
+            prompt_embeds: List of text prompt embeddings (ragged).
+            negative_prompt_embeds: Optional list of negative prompt embeddings.
+            guidance_scale: CFG scale factor.
+            cfg_normalization: Whether to apply CFG normalization.
+            cfg_truncation: CFG truncation threshold.
+            next_latents: Optional target latents for log-prob computation.
+            compute_log_prob: Whether to compute log probabilities.
+            return_kwargs: List of outputs to return.
+            noise_level: Current noise level for SDE sampling.
 
-        prompt_embeds = [s.prompt_embeds.to(device) for s in samples]
-        negative_prompt_embeds = [s.negative_prompt_embeds.to(device) for s in samples] if do_classifier_free_guidance else []
+        Returns:
+            FlowMatchEulerDiscreteSDESchedulerOutput containing requested outputs.
+        """
+        # 1. Prepare variables
+        batch_size = latents.shape[0]
+        sigma = t / 1000
+        sigma_prev = t_next / 1000
+        
+        # Z-Image uses reversed timesteps
+        timestep = t.expand(batch_size).to(latents.dtype)
+        t_reversed = (1000 - timestep) / 1000
+        t_norm = t_reversed[0].item()
 
-        # 2. Set scheduler timesteps        
-        _ = set_scheduler_timesteps(
-            scheduler=self.scheduler,
-            num_inference_steps=num_inference_steps,
-            seq_len=latents.shape[1],
-            device=device
+        # Auto-detect CFG
+        do_classifier_free_guidance = (
+            negative_prompt_embeds is not None
+            and guidance_scale > 0.0
         )
 
-        # 3. Forward pass
+        # 2. Determine if CFG should be applied at this timestep
         if (
             do_classifier_free_guidance
-            and cfg_truncation
+            and cfg_truncation is not None
             and float(cfg_truncation) <= 1
             and t_norm > cfg_truncation
         ):
             current_guidance_scale = 0.0
         else:
-            current_guidance_scale = guidance_scale[0]
+            current_guidance_scale = guidance_scale
 
         apply_cfg = do_classifier_free_guidance and current_guidance_scale > 0
 
+        # 3. Prepare inputs
         if apply_cfg:
             latents_typed = latents.to(self.pipeline.transformer.dtype)
             latent_model_input = latents_typed.repeat(2, 1, 1, 1)
-            prompt_embeds_model_input = prompt_embeds + negative_prompt_embeds # List concatenation
-            timestep_model_input = t.repeat(2)
+            prompt_embeds_model_input = prompt_embeds + negative_prompt_embeds  # List concatenation
+            timestep_model_input = t_reversed.repeat(2)
         else:
             latent_model_input = latents.to(self.pipeline.transformer.dtype)
             prompt_embeds_model_input = prompt_embeds
-            timestep_model_input = t
+            timestep_model_input = t_reversed
 
         latent_model_input = latent_model_input.unsqueeze(2)
         latent_model_input_list = list(latent_model_input.unbind(dim=0))
 
+        # 4. Transformer forward pass
         model_out_list = self.transformer(
             latent_model_input_list,
             timestep_model_input,
@@ -465,6 +420,7 @@ class ZImageAdapter(BaseAdapter):
             return_dict=False,
         )[0]
 
+        # 5. Apply CFG
         if apply_cfg:
             pos_out = model_out_list[:batch_size]
             neg_out = model_out_list[batch_size:]
@@ -475,6 +431,7 @@ class ZImageAdapter(BaseAdapter):
                 neg = neg_out[j].float()
                 pred = pos + current_guidance_scale * (pos - neg)
                 
+                # CFG normalization
                 if cfg_normalization and float(cfg_normalization) > 0.0:
                     ori_pos_norm = torch.linalg.vector_norm(pos)
                     new_pos_norm = torch.linalg.vector_norm(pred)
@@ -486,20 +443,22 @@ class ZImageAdapter(BaseAdapter):
             
             noise_pred = torch.stack(noise_pred, dim=0)
         else:
-            noise_pred = torch.stack([t.float() for t in model_out_list], dim=0)
+            noise_pred = torch.stack([out.float() for out in model_out_list], dim=0)
 
         noise_pred = noise_pred.squeeze(2)
-        noise_pred = -noise_pred
+        noise_pred = -noise_pred  # Z-Image specific: negate noise prediction
 
-        # 4. Compute log prob with given next_latents
-        step_kwargs = filter_kwargs(self.scheduler.step, **kwargs)
+        # 6. Scheduler step
         output = self.scheduler.step(
             noise_pred=noise_pred,
-            timestep=timestep,
+            sigma=sigma,
+            sigma_prev=sigma_prev,
             latents=latents,
             next_latents=next_latents,
             compute_log_prob=compute_log_prob,
             return_dict=True,
-            **step_kwargs,
+            return_kwargs=return_kwargs,
+            noise_level=noise_level,
         )
+        
         return output

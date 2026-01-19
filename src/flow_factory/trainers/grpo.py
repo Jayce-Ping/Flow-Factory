@@ -145,8 +145,8 @@ class GRPOTrainer(BaseTrainer):
         # 3. Group rewards by unique_ids - each sample has its `unique_id` hashed from its prompt, conditioning, etc.
         unique_ids = torch.tensor([s.unique_id for s in samples], dtype=torch.int64, device=self.accelerator.device)
         gathered_ids = self.accelerator.gather(unique_ids).cpu().numpy()
-        _unique_ids, group_indices = np.unique(gathered_ids, return_inverse=True)
-
+        _unique_ids, group_indices, _counts = np.unique(gathered_ids, return_inverse=True, return_counts=True)
+        
         # 4. Compute advantages within each group
         advantages = np.zeros_like(aggregated_rewards, dtype=np.float64)
 
@@ -242,7 +242,7 @@ class GRPOTrainer(BaseTrainer):
                         num_timesteps = batch['timesteps'].shape[1]
                         t = batch['timesteps'][:, timestep_index]
                         t_next = (
-                            batch['timesteps'][0, timestep_index + 1]
+                            batch['timesteps'][:, timestep_index + 1]
                             if timestep_index + 1 < num_timesteps
                             else torch.tensor(0, device=self.accelerator.device)
                         )

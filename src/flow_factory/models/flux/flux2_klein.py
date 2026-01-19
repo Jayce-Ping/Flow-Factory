@@ -254,8 +254,8 @@ class Flux2KleinAdapter(BaseAdapter):
                 device=device,
                 dtype=dtype,
             )
-            image_latents_list.append(image_latents)
-            image_latent_ids_list.append(image_latent_ids)
+            image_latents_list.append(image_latents.squeeze(0))
+            image_latent_ids_list.append(image_latent_ids.squeeze(0))
         
         condition_image_tensors : List[List[torch.Tensor]] = [
             [
@@ -267,8 +267,8 @@ class Flux2KleinAdapter(BaseAdapter):
 
         return {
             "condition_images": condition_image_tensors, # List[List[torch.Tensor (3, H, W)]]
-            "image_latents": image_latents_list, # List[torch.Tensor (1, seq_len, C)]
-            "image_latent_ids": image_latent_ids_list, # List[torch.Tensor (1, seq_len)]
+            "image_latents": image_latents_list, # List[torch.Tensor (seq_len, C)]
+            "image_latent_ids": image_latent_ids_list, # List[torch.Tensor (seq_len, 3)]
         }
 
     def _standardize_image_input(
@@ -361,7 +361,7 @@ class Flux2KleinAdapter(BaseAdapter):
         prompt_embeds: Optional[torch.Tensor] = None,
         text_ids: Optional[torch.Tensor] = None,
         # Negative prompt encoding arguments
-        negative_prompt_ids: Optional[torch.LongTensor] = None,
+        negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         negative_text_ids: Optional[torch.Tensor] = None,
         # Image encoding arguments
@@ -422,9 +422,9 @@ class Flux2KleinAdapter(BaseAdapter):
                 dtype=dtype,
                 generator=generator,
             )
-            condition_images = image_encoding["condition_images"][0] # List[torch.Tensor (3, H, W)]
-            image_latents = image_encoding["image_latents"][0] # torch.Tensor (1, seq_len, C)
-            image_latent_ids = image_encoding["image_latent_ids"][0] # torch.Tensor (1, seq_len)
+            condition_images = image_encoding["condition_images"] # List[List[torch.Tensor (3, H, W)]]
+            image_latents = image_encoding["image_latents"][0].unsqueeze(0) # torch.Tensor (1, seq_len, C)
+            image_latent_ids = image_encoding["image_latent_ids"][0].unsqueeze(0) # torch.Tensor (1, seq_len)
         else:
             image_latents = image_latents.to(device) if image_latents is not None else None
             image_latent_ids = image_latent_ids.to(device) if image_latent_ids is not None else None
@@ -481,7 +481,6 @@ class Flux2KleinAdapter(BaseAdapter):
                 compute_log_prob=compute_log_prob and current_noise_level > 0,
                 return_kwargs=return_kwargs,
                 noise_level=current_noise_level,
-                use_cache_context=True,
             )
 
             latents = output.next_latents.to(dtype)
@@ -537,7 +536,7 @@ class Flux2KleinAdapter(BaseAdapter):
                 negative_prompt_embeds=negative_prompt_embeds[b] if negative_prompt_embeds is not None else None,
                 negative_text_ids=negative_text_ids[b] if negative_text_ids is not None else None,
                 # Condition images & latents
-                condition_images=condition_images if condition_images is not None else None,
+                condition_images=condition_images[b] if condition_images is not None else None,
                 image_latents=image_latents[b] if image_latents is not None else None,
                 image_latent_ids=image_latent_ids[b] if image_latent_ids is not None else None,
                 # Extra kwargs
@@ -588,24 +587,18 @@ class Flux2KleinAdapter(BaseAdapter):
             prompt = [prompt]
         
         # Check for ragged inputs that require per-sample processing
-        is_ragged_images = (
+        is_ragged_multi_images = (
             ( isinstance(images, list) and len(images) > 0 and isinstance(images[0], list) ) # List[List[Image]]
             or
             ( isinstance(images, list) and len(images) > 0 and isinstance(images[0], torch.Tensor) and images[0].ndim == 4 ) # List[torch.Tensor : ndim=4]
-            or
-            ( isinstance(images, torch.Tensor) and images.ndim == 5 ) # torch.Tensor : ndim=5
         )
-        is_ragged_image_latents = (
+        is_ragged_multi_image_latents = (
             (
                 isinstance(image_latents, list) and len(image_latents) > 0
-                and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 3
-            ) # List[torch.Tensor : ndim=3]
-            or
-            (
-                isinstance(image_latents, torch.Tensor) and image_latents.ndim == 4
-            ) # torch.Tensor : ndim=4
+                and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 2
+            ) # List[torch.Tensor : ndim=2 (seq_len, C)]
         )
-        if not (is_ragged_images or is_ragged_image_latents):
+        if not (is_ragged_multi_images or is_ragged_multi_image_latents):
             # T2I or Shared condition images across the batch
             return self._inference(
                 # Ordinary args
@@ -645,14 +638,30 @@ class Flux2KleinAdapter(BaseAdapter):
             )
             self._has_warned_inference_fallback = True
         # Process each sample individually by calling _inference
-        batch_size = len(images) if is_ragged_images else len(image_latents)
+        batch_size = len(images) if is_ragged_multi_images else len(image_latents)
 
         samples = []
         for idx in range(batch_size):
+            # Extract single sample tensors -  keep batch dimension as 1
+            # Prompt
+            this_prompt = prompt[idx] if prompt is not None else None
+            this_prompt_ids = prompt_ids[idx].unsqueeze(0)
+            this_prompt_embeds = prompt_embeds[idx].unsqueeze(0)
+            this_text_ids = text_ids[idx].unsqueeze(0)
+            # Negative Prompt
+            this_negative_prompt_ids=negative_prompt_ids[idx].unsqueeze(0) if negative_prompt_ids is not None else None
+            this_negative_prompt_embeds=negative_prompt_embeds[idx].unsqueeze(0) if negative_prompt_embeds is not None else None
+            this_negative_text_ids=negative_text_ids[idx].unsqueeze(0) if negative_text_ids is not None else None
+            # Image
+            this_images=images[idx] if images is not None else None # No batch dimension for `images`
+            this_condition_images=condition_images[idx:idx+1] if condition_images is not None else None
+            this_image_latents=image_latents[idx].unsqueeze(0) if image_latents is not None else None
+            this_image_latent_ids=image_latent_ids[idx].unsqueeze(0) if image_latent_ids is not None else None
+            # Inference for one sample
             sample = self._inference(
                 # Ordinary args
-                images=images[idx] if is_ragged_images else images,
-                prompt=prompt[idx] if prompt is not None else None,
+                images=this_images,
+                prompt=this_prompt,
                 height=height,
                 width=width,
                 num_inference_steps=num_inference_steps,
@@ -660,17 +669,17 @@ class Flux2KleinAdapter(BaseAdapter):
                 do_classifier_free_guidance=do_classifier_free_guidance,
                 generator=generator[idx] if isinstance(generator, list) else generator,
                 # Prompt encoding args
-                prompt_ids=prompt_ids[idx:idx+1] if prompt_ids is not None else None,
-                prompt_embeds=prompt_embeds[idx:idx+1] if prompt_embeds is not None else None,
-                text_ids=text_ids[idx:idx+1] if text_ids is not None else None,
+                prompt_ids=this_prompt_ids,
+                prompt_embeds=this_prompt_embeds,
+                text_ids=this_text_ids,
                 # Negative prompt encoding args
-                negative_prompt_ids=negative_prompt_ids[idx:idx+1] if negative_prompt_ids is not None else None,
-                negative_prompt_embeds=negative_prompt_embeds[idx:idx+1] if negative_prompt_embeds is not None else None,
-                negative_text_ids=negative_text_ids[idx:idx+1] if negative_text_ids is not None else None,
+                negative_prompt_ids=this_negative_prompt_ids,
+                negative_prompt_embeds=this_negative_prompt_embeds,
+                negative_text_ids=this_negative_text_ids,
                 # Image encoding args
-                condition_images=condition_images[idx] if is_ragged_images else condition_images,
-                image_latents=image_latents[idx] if is_ragged_image_latents else image_latents,
-                image_latent_ids=image_latent_ids[idx] if is_ragged_image_latents else image_latent_ids,
+                condition_images=this_condition_images,
+                image_latents=this_image_latents,
+                image_latent_ids=this_image_latent_ids,
                 # Other args
                 joint_attention_kwargs=joint_attention_kwargs,
                 max_sequence_length=max_sequence_length,
@@ -705,7 +714,6 @@ class Flux2KleinAdapter(BaseAdapter):
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         compute_log_prob: bool = True,
         return_kwargs: List[str] = ['noise_pred', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
-        use_cache_context: bool = True,
     ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
         """
         Core forward pass handling both T2I and I2I.
@@ -728,7 +736,6 @@ class Flux2KleinAdapter(BaseAdapter):
             compute_log_prob: Whether to compute log probabilities.
             return_kwargs: List of outputs to return.
             noise_level: Current noise level for SDE sampling.
-            use_cache_context: Whether to use cache context (for inference).
 
         Returns:
             SDESchedulerOutput containing requested outputs.
@@ -746,19 +753,7 @@ class Flux2KleinAdapter(BaseAdapter):
             latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
 
         # Conditional forward pass
-        if use_cache_context:
-            with self.pipeline.transformer.cache_context("cond"):
-                noise_pred = self.transformer(
-                    hidden_states=latent_model_input,
-                    timestep=sigma.expand(batch_size),
-                    guidance=None,
-                    encoder_hidden_states=prompt_embeds,
-                    txt_ids=text_ids,
-                    img_ids=latent_image_ids,
-                    joint_attention_kwargs=joint_attention_kwargs,
-                    return_dict=False,
-                )[0]
-        else:
+        with self.pipeline.transformer.cache_context("cond"):
             noise_pred = self.transformer(
                 hidden_states=latent_model_input,
                 timestep=sigma.expand(batch_size),
@@ -775,19 +770,7 @@ class Flux2KleinAdapter(BaseAdapter):
 
         # CFG: unconditional forward pass
         if do_classifier_free_guidance and guidance_scale > 1.0:
-            if use_cache_context:
-                with self.pipeline.transformer.cache_context("uncond"):
-                    neg_noise_pred = self.transformer(
-                        hidden_states=latent_model_input,
-                        timestep=sigma.expand(batch_size),
-                        guidance=None,
-                        encoder_hidden_states=negative_prompt_embeds,
-                        txt_ids=negative_text_ids,
-                        img_ids=latent_image_ids,
-                        joint_attention_kwargs=joint_attention_kwargs,
-                        return_dict=False,
-                    )[0]
-            else:
+            with self.pipeline.transformer.cache_context("uncond"):
                 neg_noise_pred = self.transformer(
                     hidden_states=latent_model_input,
                     timestep=sigma.expand(batch_size),
@@ -838,16 +821,19 @@ class Flux2KleinAdapter(BaseAdapter):
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         compute_log_prob: bool = True,
         return_kwargs: List[str] = ['noise_pred', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
-        use_cache_context: bool = False,
-    ) -> SDESchedulerOutput:
+    ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
         """
         General forward method handling both T2I and I2I, including ragged I2I batches.
         """
-        # Check if ragged I2I (List of tensors with different seq_len)
-        is_ragged = isinstance(image_latents, list)
-
-        if not is_ragged:
-            # T2I or uniform I2I: call _forward() directly
+        # Check if ragged I2I
+        is_ragged_multi_image_latents = (
+            (
+                isinstance(image_latents, list) and len(image_latents) > 0
+                and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 2
+            ) # List[torch.Tensor : ndim=2 (seq_len, C)]
+        )
+        if not is_ragged_multi_image_latents:
+            # T2I: call _forward() directly
             return self._forward(
                 t=t,
                 t_next=t_next,
@@ -866,7 +852,6 @@ class Flux2KleinAdapter(BaseAdapter):
                 compute_log_prob=compute_log_prob,
                 return_kwargs=return_kwargs,
                 noise_level=noise_level,
-                use_cache_context=use_cache_context,
             )
 
         # Ragged I2I: process one by one
@@ -882,6 +867,8 @@ class Flux2KleinAdapter(BaseAdapter):
 
         for idx in range(batch_size):
             # Extract single sample tensors -  keep batch dimension as 1
+            single_t = t[idx].unsqueeze(0)
+            single_t_next = t_next[idx].unsqueeze(0)
             single_latents = latents[idx].unsqueeze(0)
             single_latent_ids = latent_ids[idx].unsqueeze(0)
             single_prompt_embeds = prompt_embeds[idx].unsqueeze(0)
@@ -896,8 +883,8 @@ class Flux2KleinAdapter(BaseAdapter):
                 single_negative_text_ids = negative_text_ids[idx].unsqueeze(0) if negative_text_ids is not None else None
 
             out = self._forward(
-                t=t,
-                t_next=t_next,
+                t=single_t,
+                t_next=single_t_next,
                 latents=single_latents,
                 latent_ids=single_latent_ids,
                 prompt_embeds=single_prompt_embeds,
@@ -913,13 +900,12 @@ class Flux2KleinAdapter(BaseAdapter):
                 compute_log_prob=compute_log_prob,
                 return_kwargs=return_kwargs,
                 noise_level=noise_level,
-                use_cache_context=use_cache_context,
             )
             outputs.append(out)
 
         # Concatenate outputs along batch dimension
         outputs_dict = [o.to_dict() for o in outputs]
-        return SDESchedulerOutput.from_dict({
+        return FlowMatchEulerDiscreteSDESchedulerOutput.from_dict({
             k: torch.cat([o[k] for o in outputs_dict], dim=0) if outputs_dict[0][k] is not None else None
             for k in outputs_dict[0].keys()
         })
