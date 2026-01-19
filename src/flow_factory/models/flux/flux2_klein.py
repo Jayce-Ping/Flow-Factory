@@ -30,7 +30,7 @@ import logging
 from ..abc import BaseAdapter
 from ..samples import I2ISample
 from ...hparams import *
-from ...scheduler import FlowMatchEulerDiscreteSDEScheduler, SDESchedulerOutput, set_scheduler_timesteps
+from ...scheduler import FlowMatchEulerDiscreteSDEScheduler, FlowMatchEulerDiscreteSDESchedulerOutput, SDESchedulerOutput, set_scheduler_timesteps
 from ...utils.base import (
     filter_kwargs,
     is_pil_image_batch_list,
@@ -457,51 +457,28 @@ class Flux2KleinAdapter(BaseAdapter):
         extra_call_back_res = defaultdict(list)
 
         for i, t in enumerate(timesteps):
-            timestep = t.expand(latents.shape[0]).to(latents.dtype)
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
+            t_next = timesteps[i + 1] if i + 1 < len(timesteps) else torch.tensor(0, device=device)
+            return_kwargs = list(set(['next_latents', 'log_prob', 'noise_pred'] + extra_call_back_kwargs))
 
-            latent_model_input = latents.to(torch.float32)
-            latent_image_ids = latent_ids
-
-            if image_latents is not None:
-                latent_model_input = torch.cat([latents, image_latents], dim=1).to(torch.float32)
-                latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
-
-            with self.pipeline.transformer.cache_context("cond"):
-                noise_pred = self.transformer(
-                    hidden_states=latent_model_input,  # (B, image_seq_len, C)
-                    timestep=timestep / 1000,
-                    guidance=None,
-                    encoder_hidden_states=prompt_embeds,
-                    txt_ids=text_ids,  # B, text_seq_len, 4
-                    img_ids=latent_image_ids,  # B, image_seq_len, 4
-                    joint_attention_kwargs=attention_kwargs,
-                    return_dict=False,
-                )[0]
-
-            noise_pred = noise_pred[:, : latents.size(1) :]
-            
-            if do_classifier_free_guidance and guidance_scale > 1.0:
-                with self.pipeline.transformer.cache_context("uncond"):
-                    neg_noise_pred = self.transformer(
-                        hidden_states=latent_model_input,
-                        timestep=timestep / 1000,
-                        guidance=None,
-                        encoder_hidden_states=negative_prompt_embeds,
-                        txt_ids=negative_text_ids,
-                        img_ids=latent_image_ids,
-                        joint_attention_kwargs=attention_kwargs,
-                        return_dict=False,
-                    )[0]
-                neg_noise_pred = neg_noise_pred[:, : latents.size(1) :]
-                noise_pred = neg_noise_pred + guidance_scale * (noise_pred - neg_noise_pred)
-
-            # Compute the previous noisy sample x_t -> x_t-1
-            output = self.scheduler.step(
-                noise_pred=noise_pred,
-                timestep=t,
+            output = self._forward(
+                t=t,
+                t_next=t_next,
                 latents=latents,
+                latent_ids=latent_ids,
+                prompt_embeds=prompt_embeds,
+                text_ids=text_ids,
+                image_latents=image_latents,
+                image_latent_ids=image_latent_ids,
+                negative_prompt_embeds=negative_prompt_embeds,
+                negative_text_ids=negative_text_ids,
+                do_classifier_free_guidance=do_classifier_free_guidance,
+                guidance_scale=guidance_scale,
+                attention_kwargs=attention_kwargs,
                 compute_log_prob=compute_log_prob and current_noise_level > 0,
+                return_kwargs=return_kwargs,
+                noise_level=current_noise_level,
+                use_cache_context=True,
             )
 
             latents = output.next_latents.to(dtype)
@@ -511,7 +488,7 @@ class Flux2KleinAdapter(BaseAdapter):
                 all_log_probs.append(output.log_prob)
 
             if extra_call_back_kwargs:
-                capturable = {'noise_pred': noise_pred, 'noise_levels': current_noise_level}
+                capturable = {'noise_levels': current_noise_level}
                 for key in extra_call_back_kwargs:
                     if key in capturable and capturable[key] is not None:
                         # First check in capturable dict
@@ -705,173 +682,62 @@ class Flux2KleinAdapter(BaseAdapter):
         return samples
     
     # ======================== Forward ========================
-    def forward(
+    def _forward(
         self,
-        samples: List[Flux2KleinSample],
-        timestep_index : int,
+        t: torch.Tensor,
+        t_next: torch.Tensor,
+        latents: torch.Tensor,
+        latent_ids: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        text_ids: torch.Tensor,
+        # Optional for I2I
+        image_latents: Optional[torch.Tensor] = None,
+        image_latent_ids: Optional[torch.Tensor] = None,
+        # Optional for CFG
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        negative_text_ids: Optional[torch.Tensor] = None,
+        do_classifier_free_guidance: bool = False,
+        guidance_scale: float = 4.0,
+        # Other
+        next_latents: Optional[torch.Tensor] = None,
+        attention_kwargs: Optional[Dict[str, Any]] = None,
         compute_log_prob: bool = True,
+        return_kwargs: List[str] = ['noise_pred', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
+        noise_level: float = 0.0,
+        use_cache_context: bool = True,
         **kwargs,
-    ) -> SDESchedulerOutput:
-        """Compute log-probabilities for training."""
-        # Determine T2I / I2I
-        is_i2i = any(
-            s.image_latents is not None
-            for s in samples
-        )
+    ) -> FlowMatchEulerDiscreteSDESchedulerOutput:
+        """
+        Core forward pass handling both T2I and I2I.
 
-        if is_i2i:
-            if not self._has_warned_forward_fallback:
-                logger.warning(
-                    "Flux.2: Batched I2I training unsupported. Falling back to single-sample forward (warning shown once)."
-                )
-                self._has_warned_forward_fallback = True
-            # Fallback to single-sample forward
-            outputs = []
-            for s in samples:
-                out = self._i2i_forward(
-                    sample=s,
-                    timestep_index=timestep_index,
-                    compute_log_prob=compute_log_prob,
-                    **kwargs,
-                )
-                outputs.append(out)
+        Args:
+            t: Current timestep tensor.
+            t_next: Next timestep tensor.
+            latents: Current latent representations (B, seq_len, C).
+            latent_ids: Latent position IDs (B, seq_len, 4).
+            prompt_embeds: Text prompt embeddings.
+            text_ids: Text position IDs.
+            image_latents: Optional condition image latents (for I2I).
+            image_latent_ids: Optional condition image position IDs.
+            negative_prompt_embeds: Optional negative prompt embeddings (for CFG).
+            negative_text_ids: Optional negative text position IDs.
+            do_classifier_free_guidance: Whether to apply CFG.
+            guidance_scale: CFG scale factor.
+            next_latents: Optional target latents for log-prob computation.
+            attention_kwargs: Optional kwargs for attention layers.
+            compute_log_prob: Whether to compute log probabilities.
+            return_kwargs: List of outputs to return.
+            noise_level: Current noise level for SDE sampling.
+            use_cache_context: Whether to use cache context (for inference).
 
-            outputs = [o.to_dict() for o in outputs]
-            # Concatenate outputs
-            output = SDESchedulerOutput.from_dict({
-                k: torch.cat([o[k] for o in outputs], dim=0) if outputs[0][k] is not None else None
-                for k in outputs[0].keys()
-            })
+        Returns:
+            SDESchedulerOutput containing requested outputs.
+        """
+        batch_size = latents.shape[0]
+        sigma = t / 1000
+        sigma_prev = t_next / 1000
 
-        else:
-            # T2I, can be batched
-            output = self._t2i_forward(
-                samples=samples,
-                timestep_index=timestep_index,
-                compute_log_prob=compute_log_prob,
-                **kwargs,
-            )
-
-        return output
-
-    def _t2i_forward(
-        self,
-        samples: List[Flux2KleinSample],
-        timestep_index : int,
-        compute_log_prob: bool = True,
-        **kwargs,
-    ) -> SDESchedulerOutput:
-        if not isinstance(samples, list):
-            samples = [samples]
-
-        batch_size = len(samples)
-        device = self.device
-        do_classifier_free_guidance = any(
-            s.extra_kwargs.get('do_classifier_free_guidance', False)
-            for s in samples
-        )
-        guidance_scale = [
-            s.extra_kwargs.get('guidance_scale', self.training_args.guidance_scale)
-            for s in samples
-        ]
-        guidance = torch.as_tensor(guidance_scale, device=device, dtype=torch.float32)
-
-        # 1. Extract data from samples
-        latents = torch.stack([s.all_latents[timestep_index] for s in samples], dim=0).to(device)
-        next_latents = torch.stack([s.all_latents[timestep_index + 1] for s in samples], dim=0).to(device)
-        timestep = torch.stack([s.timesteps[timestep_index] for s in samples], dim=0).to(device)
-        num_inference_steps = len(samples[0].timesteps)
-        t = timestep[0]
-        prompt_embeds = torch.stack([s.prompt_embeds for s in samples], dim=0).to(device)
-        latent_ids = torch.stack([s.latent_ids for s in samples], dim=0).to(device)
-        text_ids = torch.stack([s.text_ids for s in samples], dim=0).to(device)
-        image_latents =  None # Hard code for T2I
-        image_latent_ids =  None
-        attention_kwargs = samples[0].extra_kwargs.get('attention_kwargs', None)
-
-        # Catenate condition latents if given
-        latent_model_input = latents.to(torch.float32)
-        latent_image_ids = latent_ids
-                
-        # 2. Set scheduler timesteps
-        mu = compute_empirical_mu(image_seq_len=latents.shape[1], num_steps=num_inference_steps)
-        timesteps = set_scheduler_timesteps(
-            scheduler=self.pipeline.scheduler,
-            num_inference_steps=num_inference_steps,
-            device=device,
-            mu=mu,
-        )
-
-        # 3. Predict noise
-        noise_pred = self.transformer(
-            hidden_states=latent_model_input,  # (B, image_seq_len, C)
-            timestep=timestep / 1000,
-            guidance=guidance,
-            encoder_hidden_states=prompt_embeds,
-            txt_ids=text_ids,  # B, text_seq_len, 4
-            img_ids=latent_image_ids,  # B, image_seq_len, 4
-            joint_attention_kwargs=attention_kwargs,
-            return_dict=False,
-        )[0]
-
-        noise_pred = noise_pred[:, : latents.size(1) :]
-
-        if do_classifier_free_guidance and guidance_scale[0] > 1.0:
-            neg_prompt_embeds = torch.stack([s.negative_prompt_embeds for s in samples], dim=0).to(device)
-            neg_text_ids = torch.stack([s.negative_text_ids for s in samples], dim=0).to(device)
-
-            neg_noise_pred = self.transformer(
-                hidden_states=latent_model_input,
-                timestep=timestep / 1000,
-                guidance=None,
-                encoder_hidden_states=neg_prompt_embeds,
-                txt_ids=neg_text_ids,
-                img_ids=latent_image_ids,
-                joint_attention_kwargs=attention_kwargs,
-                return_dict=False,
-            )[0]
-            neg_noise_pred = neg_noise_pred[:, : latents.size(1) :]
-            noise_pred = neg_noise_pred + guidance * (noise_pred - neg_noise_pred)
-
-        # 4. Compute log prob with given next_latents
-        step_kwargs = filter_kwargs(self.scheduler.step, **kwargs)
-        output = self.scheduler.step(
-            noise_pred=noise_pred,
-            timestep=timestep,
-            latents=latents,
-            next_latents=next_latents,
-            compute_log_prob=compute_log_prob,
-            return_dict=True,
-            **step_kwargs,
-        )
-        
-        return output
-    
-    def _i2i_forward(
-        self,
-        sample: Flux2KleinSample,
-        timestep_index : int,
-        compute_log_prob: bool = True,
-        **kwargs,
-    ) -> SDESchedulerOutput:
-        device = self.device
-        batch_size = 1 # Single-sample only
-        do_classifier_free_guidance = sample.extra_kwargs.get('do_classifier_free_guidance', False)
-        guidance_scale = sample.extra_kwargs.get('guidance_scale', self.training_args.guidance_scale)
-        guidance = torch.full([1], guidance_scale, device=device, dtype=torch.float32)
-        # 1. Extract data from sample
-        latents = sample.all_latents[timestep_index].unsqueeze(0).to(device)
-        next_latents = sample.all_latents[timestep_index + 1].unsqueeze(0).to(device)
-        timestep = sample.timesteps[timestep_index].unsqueeze(0).to(device)
-        num_inference_steps = len(sample.timesteps)
-        t = timestep[0]
-        prompt_embeds = sample.prompt_embeds.unsqueeze(0).to(device)
-        latent_ids = sample.latent_ids.unsqueeze(0).to(device)
-        text_ids = sample.text_ids.unsqueeze(0).to(device)
-        image_latents = sample.image_latents.unsqueeze(0).to(device) if sample.image_latents is not None else None
-        image_latent_ids = sample.image_latent_ids.unsqueeze(0).to(device) if sample.image_latent_ids is not None else None
-        attention_kwargs = sample.extra_kwargs.get('attention_kwargs', None)
-
+        # Prepare model input (concatenate condition latents for I2I)
         latent_model_input = latents.to(torch.float32)
         latent_image_ids = latent_ids
 
@@ -879,53 +745,185 @@ class Flux2KleinAdapter(BaseAdapter):
             latent_model_input = torch.cat([latents, image_latents], dim=1).to(torch.float32)
             latent_image_ids = torch.cat([latent_ids, image_latent_ids], dim=1)
 
-        # 2. Set scheduler timesteps
-        mu = compute_empirical_mu(image_seq_len=latents.shape[1], num_steps=num_inference_steps)
-        timesteps = set_scheduler_timesteps(
-            scheduler=self.pipeline.scheduler,
-            num_inference_steps=num_inference_steps,
-            device=device,
-            mu=mu,
-        )
-        # 3. Predict noise
-        noise_pred = self.transformer(
-            hidden_states=latent_model_input,  # (B, image_seq_len, C)
-            timestep=timestep / 1000,
-            guidance=guidance,
-            encoder_hidden_states=prompt_embeds,
-            txt_ids=text_ids,  # B, text_seq_len, 4
-            img_ids=latent_image_ids,  # B, image_seq_len, 4
-            joint_attention_kwargs=attention_kwargs,
-            return_dict=False,
-        )[0]
-        noise_pred = noise_pred[:, : latents.size(1) :]
-
-        if do_classifier_free_guidance and guidance_scale > 1.0:
-            neg_prompt_embeds = sample.negative_prompt_embeds.unsqueeze(0).to(device)
-            neg_text_ids = sample.negative_text_ids.unsqueeze(0).to(device)
-
-            neg_noise_pred = self.transformer(
+        # Conditional forward pass
+        if use_cache_context:
+            with self.pipeline.transformer.cache_context("cond"):
+                noise_pred = self.transformer(
+                    hidden_states=latent_model_input,
+                    timestep=sigma.expand(batch_size),
+                    guidance=None,
+                    encoder_hidden_states=prompt_embeds,
+                    txt_ids=text_ids,
+                    img_ids=latent_image_ids,
+                    joint_attention_kwargs=attention_kwargs,
+                    return_dict=False,
+                )[0]
+        else:
+            noise_pred = self.transformer(
                 hidden_states=latent_model_input,
-                timestep=timestep / 1000,
+                timestep=sigma.expand(batch_size),
                 guidance=None,
-                encoder_hidden_states=neg_prompt_embeds,
-                txt_ids=neg_text_ids,
+                encoder_hidden_states=prompt_embeds,
+                txt_ids=text_ids,
                 img_ids=latent_image_ids,
                 joint_attention_kwargs=attention_kwargs,
                 return_dict=False,
             )[0]
-            neg_noise_pred = neg_noise_pred[:, : latents.size(1) :]
+
+        # Extract only target latent predictions (exclude condition image part)
+        noise_pred = noise_pred[:, :latents.shape[1]]
+
+        # CFG: unconditional forward pass
+        if do_classifier_free_guidance and guidance_scale > 1.0:
+            if use_cache_context:
+                with self.pipeline.transformer.cache_context("uncond"):
+                    neg_noise_pred = self.transformer(
+                        hidden_states=latent_model_input,
+                        timestep=sigma.expand(batch_size),
+                        guidance=None,
+                        encoder_hidden_states=negative_prompt_embeds,
+                        txt_ids=negative_text_ids,
+                        img_ids=latent_image_ids,
+                        joint_attention_kwargs=attention_kwargs,
+                        return_dict=False,
+                    )[0]
+            else:
+                neg_noise_pred = self.transformer(
+                    hidden_states=latent_model_input,
+                    timestep=sigma.expand(batch_size),
+                    guidance=None,
+                    encoder_hidden_states=negative_prompt_embeds,
+                    txt_ids=negative_text_ids,
+                    img_ids=latent_image_ids,
+                    joint_attention_kwargs=attention_kwargs,
+                    return_dict=False,
+                )[0]
+
+            neg_noise_pred = neg_noise_pred[:, :latents.shape[1]]
             noise_pred = neg_noise_pred + guidance_scale * (noise_pred - neg_noise_pred)
 
-        # 4. Compute log prob with given next_latents
-        step_kwargs = filter_kwargs(self.scheduler.step, **kwargs)
+        # Scheduler step
         output = self.scheduler.step(
             noise_pred=noise_pred,
-            timestep=timestep,
+            sigma=sigma,
+            sigma_prev=sigma_prev,
             latents=latents,
             next_latents=next_latents,
             compute_log_prob=compute_log_prob,
             return_dict=True,
-            **step_kwargs,
+            return_kwargs=return_kwargs,
+            noise_level=noise_level,
+            **filter_kwargs(self.scheduler.step, **kwargs),
         )
         return output
+
+    def forward(
+        self,
+        t: torch.Tensor,
+        t_next: torch.Tensor,
+        latents: torch.Tensor,
+        latent_ids: Union[torch.Tensor, List[torch.Tensor]],
+        prompt_embeds: torch.Tensor,
+        text_ids: Union[torch.Tensor, List[torch.Tensor]],
+        # Optional for I2I (can be List for ragged batches)
+        image_latents: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None,
+        image_latent_ids: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None,
+        # Optional for CFG
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        negative_text_ids: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None,
+        do_classifier_free_guidance: bool = False,
+        guidance_scale: float = 4.0,
+        # Other
+        next_latents: Optional[torch.Tensor] = None,
+        attention_kwargs: Optional[Dict[str, Any]] = None,
+        compute_log_prob: bool = True,
+        return_kwargs: List[str] = ['noise_pred', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
+        noise_level: float = 0.0,
+        use_cache_context: bool = False,
+        **kwargs,
+    ) -> SDESchedulerOutput:
+        """
+        General forward method handling both T2I and I2I, including ragged I2I batches.
+        """
+        # Check if ragged I2I (List of tensors with different seq_len)
+        is_ragged = isinstance(image_latents, list)
+
+        if not is_ragged:
+            # T2I or uniform I2I: call _forward() directly
+            return self._forward(
+                t=t,
+                t_next=t_next,
+                latents=latents,
+                latent_ids=latent_ids,
+                prompt_embeds=prompt_embeds,
+                text_ids=text_ids,
+                image_latents=image_latents,
+                image_latent_ids=image_latent_ids,
+                negative_prompt_embeds=negative_prompt_embeds,
+                negative_text_ids=negative_text_ids,
+                do_classifier_free_guidance=do_classifier_free_guidance,
+                guidance_scale=guidance_scale,
+                next_latents=next_latents,
+                attention_kwargs=attention_kwargs,
+                compute_log_prob=compute_log_prob,
+                return_kwargs=return_kwargs,
+                noise_level=noise_level,
+                use_cache_context=use_cache_context,
+                **kwargs,
+            )
+
+        # Ragged I2I: process one by one
+        if not self._has_warned_forward_fallback:
+            logger.warning(
+                "Flux.2: Ragged I2I detected (varying condition image sizes). "
+                "Processing samples individually (warning shown once)."
+            )
+            self._has_warned_forward_fallback = True
+
+        batch_size = latents.shape[0]
+        outputs = []
+
+        for idx in range(batch_size):
+            # Extract single sample tensors -  keep batch dimension as 1
+            single_latents = latents[idx].unsqueeze(0)
+            single_latent_ids = latent_ids[idx].unsqueeze(0)
+            single_prompt_embeds = prompt_embeds[idx].unsqueeze(0)
+            single_text_ids = text_ids[idx].unsqueeze(0)
+            single_image_latents = image_latents[idx].unsqueeze(0) if image_latents[idx] is not None else None
+            single_image_latent_ids = image_latent_ids[idx].unsqueeze(0) if image_latent_ids is not None and image_latent_ids[idx] is not None else None
+            single_next_latents = next_latents[idx].unsqueeze(0) if next_latents is not None else None
+            single_negative_prompt_embeds = None
+            single_negative_text_ids = None
+            if do_classifier_free_guidance:
+                single_negative_prompt_embeds = negative_prompt_embeds[idx].unsqueeze(0) if negative_prompt_embeds is not None else None
+                single_negative_text_ids = negative_text_ids[idx].unsqueeze(0) if negative_text_ids is not None else None
+
+            out = self._forward(
+                t=t,
+                t_next=t_next,
+                latents=single_latents,
+                latent_ids=single_latent_ids,
+                prompt_embeds=single_prompt_embeds,
+                text_ids=single_text_ids,
+                image_latents=single_image_latents,
+                image_latent_ids=single_image_latent_ids,
+                negative_prompt_embeds=single_negative_prompt_embeds,
+                negative_text_ids=single_negative_text_ids,
+                do_classifier_free_guidance=do_classifier_free_guidance,
+                guidance_scale=guidance_scale,
+                next_latents=single_next_latents,
+                attention_kwargs=attention_kwargs,
+                compute_log_prob=compute_log_prob,
+                return_kwargs=return_kwargs,
+                noise_level=noise_level,
+                use_cache_context=use_cache_context,
+                **kwargs,
+            )
+            outputs.append(out)
+
+        # Concatenate outputs along batch dimension
+        outputs_dict = [o.to_dict() for o in outputs]
+        return SDESchedulerOutput.from_dict({
+            k: torch.cat([o[k] for o in outputs_dict], dim=0) if outputs_dict[0][k] is not None else None
+            for k in outputs_dict[0].keys()
+        })

@@ -1834,13 +1834,11 @@ class BaseAdapter(ABC):
     @abstractmethod
     def forward(
         self,
-        samples : List[BaseSample],
-        timestep_index : Union[int, torch.IntTensor, torch.LongTensor],
-        compute_log_prob: bool = True,
+        *args,
         **kwargs,
     ) -> SDESchedulerOutput:
         """
-        Calculates the log-probability of the action (image/latent) given the batch of samples.
+        Calculates the log-probability of the action (image/latent) given inputs.
         """
         pass
 

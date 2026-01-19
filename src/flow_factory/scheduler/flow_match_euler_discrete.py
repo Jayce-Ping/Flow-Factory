@@ -216,53 +216,58 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler, SDESch
 
     def step(
         self,
-        noise_pred: torch.FloatTensor,
-        timestep: Union[int, float, torch.Tensor],
-        latents: torch.FloatTensor,
-        next_latents: Optional[torch.FloatTensor] = None,
+        noise_pred: torch.Tensor,
+        latents: torch.Tensor,
+        next_latents: Optional[torch.Tensor] = None,
+        timestep: Optional[Union[int, float, torch.Tensor]] = None,
+        sigma: Optional[torch.Tensor] = None,
+        sigma_prev: Optional[torch.Tensor] = None,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         noise_level : Optional[Union[int, float, torch.Tensor]] = None,
         compute_log_prob: bool = True,
         return_dict: bool = True,
-        return_kwargs : List[str] = ['next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
+        return_kwargs : List[str] = ['next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob', 'noise_pred'],
         dynamics_type : Optional[Literal['Flow-SDE', 'Dance-SDE', 'CPS', 'ODE']] = None,
         sigma_max: Optional[float] = None,
     ) -> Union[FlowMatchEulerDiscreteSDESchedulerOutput, Tuple]:
-        if (
-            isinstance(timestep, int)
-            or isinstance(timestep, torch.IntTensor)
-            or isinstance(timestep, torch.LongTensor)
-        ):
-            logger.warning(
-                (
-                    "Passing integer indices (e.g. from `enumerate(timesteps)`) as timesteps to `FlowMatchEulerDiscreteSDEScheduler.step()`"
-                    ", rather than one of the `scheduler.timesteps` as a timestep."
-                ),
-            )
-            step_index = int(timestep)
-            timestep = self.timesteps[step_index]
-            sigma = self.sigmas[step_index] # (1)
-            sigma_prev = self.sigmas[step_index + 1] # (1)
-        elif isinstance(timestep, torch.Tensor):
-            if timestep.ndim == 0:
-                # Scalar tensor
-                step_index = [self.index_for_timestep(timestep)]
-            elif timestep.ndim == 1:
-                # Batched 1D tensor (B,)
-                step_index = [self.index_for_timestep(t) for t in timestep]
-            else:
-                raise ValueError(
-                    f"`timestep` must be a scalar or 1D tensor, got shape {tuple(timestep.shape)}. "
-                    f"If using expanded timesteps (e.g. for Wan models), pass the original scalar timestep `t` instead."
+        _is_sigma_provided = sigma is not None and sigma_prev is not None
+        if not _is_sigma_provided:
+            # Infer sigma and sigma_prev from timestep
+            if (
+                isinstance(timestep, int)
+                or isinstance(timestep, torch.IntTensor)
+                or isinstance(timestep, torch.LongTensor)
+            ):
+                logger.warning(
+                    (
+                        "Passing integer indices (e.g. from `enumerate(timesteps)`) as timesteps to `FlowMatchEulerDiscreteSDEScheduler.step()`"
+                        ", rather than one of the `scheduler.timesteps` as a timestep."
+                    ),
                 )
-            sigma = self.sigmas[step_index]
-            sigma_prev = self.sigmas[[i + 1 for i in step_index]]
-        elif isinstance(timestep, (float, int)):
-            step_index = [self.index_for_timestep(timestep)]
-            sigma = self.sigmas[step_index]
-            sigma_prev = self.sigmas[[i + 1 for i in step_index]]
-        else:
-            raise TypeError(f"`timestep` must be float, or torch.Tensor, got {type(timestep).__name__}.")
+                step_index = int(timestep)
+                timestep = self.timesteps[step_index]
+                sigma = self.sigmas[step_index] # (1)
+                sigma_prev = self.sigmas[step_index + 1] # (1)
+            elif isinstance(timestep, torch.Tensor):
+                if timestep.ndim == 0:
+                    # Scalar tensor
+                    step_index = [self.index_for_timestep(timestep)]
+                elif timestep.ndim == 1:
+                    # Batched 1D tensor (B,)
+                    step_index = [self.index_for_timestep(t) for t in timestep]
+                else:
+                    raise ValueError(
+                        f"`timestep` must be a scalar or 1D tensor, got shape {tuple(timestep.shape)}. "
+                        f"If using expanded timesteps (e.g. for Wan models), pass the original scalar timestep `t` instead."
+                    )
+                sigma = self.sigmas[step_index]
+                sigma_prev = self.sigmas[[i + 1 for i in step_index]]
+            elif isinstance(timestep, (float, int)):
+                step_index = [self.index_for_timestep(timestep)]
+                sigma = self.sigmas[step_index]
+                sigma_prev = self.sigmas[[i + 1 for i in step_index]]
+            else:
+                raise TypeError(f"`timestep` must be float, or torch.Tensor, got {type(timestep).__name__}.")
 
         # 1. Numerical Preparation
         noise_pred = noise_pred.float()
@@ -371,7 +376,7 @@ class FlowMatchEulerDiscreteSDEScheduler(FlowMatchEulerDiscreteScheduler, SDESch
             log_prob = torch.empty((latents.shape[0]), dtype=torch.float32, device=noise_pred.device)
 
         if not return_dict:
-            return (next_latents, log_prob, next_latents_mean, std_dev_t, dt)
+            return (next_latents, next_latents_mean, noise_pred, log_prob, std_dev_t, dt)
 
         d = {}        
         for k in return_kwargs:

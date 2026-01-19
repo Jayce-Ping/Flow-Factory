@@ -251,6 +251,24 @@ class BaseSample:
         """Reset cached unique_id (call after modifying relevant fields)."""
         self._unique_id = None
 
+    @staticmethod
+    def stack(samples: List[BaseSample]) -> Dict[str, Union[torch.Tensor, List[Any]]]:
+        """Stack a list of BaseSample instances into batched tensors/lists."""
+        if not samples:
+            raise ValueError("No samples to stack.")
+        
+        stacked = {}
+        sample_dicts = [s.to_dict() for s in samples] # Convert to dicts to handle extra_kwargs
+
+        for key in sample_dicts[0].keys():
+            values = [d[key] for d in sample_dicts]
+            if all(isinstance(v, torch.Tensor) for v in values):
+                stacked[key] = torch.stack(values)
+            else:
+                stacked[key] = values
+        
+        return stacked
+
 
 @dataclass
 class ImageConditionSample(BaseSample):

@@ -18,7 +18,7 @@ Group Relative Policy Optimization (GRPO) Trainer.
 Implements GRPO algorithm for flow matching models.
 """
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any, Union
 from functools import partial
 from collections import defaultdict
 import inspect
@@ -210,9 +210,12 @@ class GRPOTrainer(BaseTrainer):
         rewards = self.reward_processor.compute_rewards(samples, store_to_samples=True, epoch=self.epoch)
         advantages = self.compute_advantages(samples, rewards, store_to_samples=True)
         
+        # Make sure all samples are on this device
+        # samples = [s.to(self.accelerator.device) for s in samples]
+
         # Create batches for optimization
-        sample_batches : List[List[BaseSample]] = [
-            samples[i:i + self.training_args.per_device_batch_size]
+        sample_batches : List[Dict[str, Union[torch.Tensor, List[Any]]]] = [
+            BaseSample.stack(samples[i:i + self.training_args.per_device_batch_size])
             for i in range(0, len(samples), self.training_args.per_device_batch_size)
         ]
 
@@ -234,15 +237,19 @@ class GRPOTrainer(BaseTrainer):
                     disable=not self.accelerator.is_local_main_process,
                 )):
                         # Get old log prob
-                        old_log_prob = torch.stack(
-                            [sample.log_probs[timestep_index] for sample in batch],
-                            dim=0
+                        old_log_prob = batch['log_probs'][:, timestep_index]
+                        adv = batch['advantage']
+                        # Get current timestep data
+                        num_timesteps = batch['timesteps'].shape[1]
+                        t = batch['timesteps'][:, timestep_index]
+                        t_next = (
+                            batch['timesteps'][0, timestep_index + 1]
+                            if timestep_index + 1 < num_timesteps
+                            else torch.tensor(0, device=self.accelerator.device)
                         )
-                        adv = torch.stack(
-                            [sample.extra_kwargs['advantage'] for sample in batch],
-                            dim=0
-                        )
-
+                        # Get latents
+                        latents = batch['latents'][:, timestep_index]
+                        next_latents = batch['next_latents'][:, timestep_index + 1]
                         with self.autocast():
                             # Forward pass
                             if self.enable_kl_penalty:
@@ -253,15 +260,17 @@ class GRPOTrainer(BaseTrainer):
                             else:
                                 return_kwargs = ['log_prob', 'std_dev_t', 'dt']
                             
-                            forward_kwargs = {
-                                **self.training_args,
-                                'samples': batch,
-                                'timestep_index': timestep_index,
+                            forward_inputs = {
+                                't': t,
+                                't_next': t_next,
+                                'latents': latents,
+                                'next_latents': next_latents,
                                 'compute_log_prob': True,
                                 'return_kwargs': return_kwargs,
+                                **batch
                             }
-                            forward_kwargs = filter_kwargs(self.adapter.forward, **forward_kwargs)
-                            output = self.adapter.forward(**forward_kwargs)
+                            forward_inputs = filter_kwargs(self.adapter.forward, **forward_inputs)
+                            output = self.adapter.forward(**forward_inputs)
 
                         # Clip advantages
                         adv_clip_range = self.training_args.adv_clip_range
@@ -279,26 +288,28 @@ class GRPOTrainer(BaseTrainer):
                         # Compute KL-div
                         if self.enable_kl_penalty:
                             with self.autocast(), torch.no_grad(), self.adapter.use_ref_parameters():
+                                ref_inputs = {
+                                    't': t,
+                                    't_next': t_next,
+                                    'latents': latents,
+                                    'next_latents': next_latents,
+                                    'compute_log_prob': False,
+                                    **batch,
+                                }
                                 if self.training_args.kl_type == 'v-based':
                                     # KL in velocity space
-                                    ref_output = self.adapter.forward(
-                                        batch,
-                                        timestep_index=timestep_index,
-                                        compute_log_prob=False,
-                                        return_kwargs=['noise_pred'],
-                                    )
+                                    ref_inputs['return_kwargs'] = ['noise_pred']
+                                    ref_inputs = filter_kwargs(self.adapter.forward, **ref_inputs)
+                                    ref_output = self.adapter.forward(**ref_inputs)
                                     kl_div = torch.mean(
                                         ((output.noise_pred - ref_output.noise_pred) ** 2),
                                         dim=tuple(range(1, output.noise_pred.ndim)), keepdim=True
                                     ) / (2 * output.std_dev_t ** 2 + 1e-7)
                                 elif self.training_args.kl_type == 'x-based':
                                     # KL in latent space
-                                    ref_output = self.adapter.forward(
-                                        batch,
-                                        timestep_index=timestep_index,
-                                        compute_log_prob=False,
-                                        return_kwargs=['next_latents_mean'],
-                                    )
+                                    ref_inputs['return_kwargs'] = ['next_latents_mean']
+                                    ref_inputs = filter_kwargs(self.adapter.forward, **ref_inputs)
+                                    ref_output = self.adapter.forward(**ref_inputs)
                                     kl_div = torch.mean(
                                         ((output.next_latents_mean - ref_output.next_latents_mean) ** 2),
                                         dim=tuple(range(1, output.next_latents_mean.ndim)), keepdim=True
