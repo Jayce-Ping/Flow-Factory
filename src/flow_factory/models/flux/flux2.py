@@ -452,7 +452,7 @@ class Flux2Adapter(BaseAdapter):
         guidance_scale: float = 4.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         # Prompt encoding arguments
-        prompt_ids: Optional[torch.LongTensor] = None,
+        prompt_ids: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         text_ids: Optional[torch.Tensor] = None,
         # Image encoding arguments
@@ -648,7 +648,7 @@ class Flux2Adapter(BaseAdapter):
         text_encoder_out_layers: Tuple[int] = (10, 20, 30),
         caption_upsample_temperature: Optional[float] = None,
         # Encoded prompt
-        prompt_ids: Optional[torch.LongTensor] = None,
+        prompt_ids: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         text_ids: Optional[torch.Tensor] = None,
         # Encoded images

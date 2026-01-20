@@ -391,7 +391,7 @@ class Flux2KleinAdapter(BaseAdapter):
         do_classifier_free_guidance: bool = False,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         # Prompt encoding arguments
-        prompt_ids: Optional[torch.LongTensor] = None,
+        prompt_ids: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         text_ids: Optional[torch.Tensor] = None,
         # Negative prompt encoding arguments
@@ -605,11 +605,11 @@ class Flux2KleinAdapter(BaseAdapter):
         max_sequence_length: int = 512,
         hidden_states_layers: Tuple[int, ...] = (9, 18, 27),
         # Encoded prompt
-        prompt_ids: Optional[torch.LongTensor] = None,
+        prompt_ids: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         text_ids: Optional[torch.Tensor] = None,
         # Encoded negative prompt
-        negative_prompt_ids: Optional[torch.LongTensor] = None,
+        negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         negative_text_ids: Optional[torch.Tensor] = None,
         # Encoded images

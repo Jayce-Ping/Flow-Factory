@@ -84,7 +84,7 @@ class QwenImageAdapter(BaseAdapter):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
         max_sequence_length: Optional[int] = None,
-    ) -> Tuple[torch.LongTensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         device = device or self.pipeline.text_encoder.device
         dtype = dtype or self.pipeline.text_encoder.dtype
 
@@ -129,7 +129,7 @@ class QwenImageAdapter(BaseAdapter):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
         **kwargs
-    ) -> Dict[str, Union[torch.LongTensor, torch.Tensor]]:
+    ) -> Dict[str, Union[torch.Tensor, torch.Tensor]]:
         """Encode text prompts using the pipeline's text encoder."""
 
         device = device or self.pipeline.text_encoder.device
@@ -220,9 +220,9 @@ class QwenImageAdapter(BaseAdapter):
 
     def _pad_batch_prompt(
         self,
-        prompt_embeds_mask: Union[List[torch.LongTensor], torch.LongTensor],
+        prompt_embeds_mask: Union[List[torch.Tensor], torch.Tensor],
         prompt_embeds: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
-        prompt_ids: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
+        prompt_ids: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
         device : Optional[torch.device] = None,
     ):
         if isinstance(prompt_embeds_mask, list):
@@ -281,12 +281,12 @@ class QwenImageAdapter(BaseAdapter):
         width: int = 1024,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         # Prompt encoding arguments
-        prompt_ids: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
+        prompt_ids: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
         prompt_embeds: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
-        prompt_embeds_mask: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
-        negative_prompt_ids: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
+        prompt_embeds_mask: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
+        negative_prompt_ids: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
         negative_prompt_embeds: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
-        negative_prompt_embeds_mask: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
+        negative_prompt_embeds_mask: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
         # Other arguments
         attention_kwargs: Optional[Dict[str, Any]] = {},
         max_sequence_length: int = 1024,

@@ -220,7 +220,7 @@ class QwenImageEditPlusAdapter(BaseAdapter):
         max_sequence_length: int = 1024,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
-    ) -> Dict[str, Union[torch.LongTensor, torch.Tensor]]:
+    ) -> Dict[str, Union[torch.Tensor, torch.Tensor]]:
         """Encode text prompts using the pipeline's text encoder."""
 
         device = device or self.pipeline.text_encoder.device
@@ -568,11 +568,11 @@ class QwenImageEditPlusAdapter(BaseAdapter):
 
     def _pad_batch_prompt(
         self,
-        prompt_embeds_mask: Union[List[torch.LongTensor], torch.LongTensor],
+        prompt_embeds_mask: Union[List[torch.Tensor], torch.Tensor],
         prompt_embeds: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
-        prompt_ids: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
+        prompt_ids: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
         device : Optional[torch.device] = None,
-    ) -> Tuple[List[int], Optional[torch.LongTensor], Optional[torch.Tensor], Optional[torch.LongTensor]]:
+    ) -> Tuple[List[int], Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         if isinstance(prompt_embeds_mask, list):
             device = device or prompt_embeds_mask[0].device
             txt_seq_lens = [mask.sum() for mask in prompt_embeds_mask]
@@ -631,12 +631,12 @@ class QwenImageEditPlusAdapter(BaseAdapter):
         width: int = 1024,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         # Prompt encoding arguments
-        prompt_ids: Optional[torch.LongTensor] = None,
+        prompt_ids: Optional[torch.Tensor] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
-        prompt_embeds_mask: Optional[torch.LongTensor] = None,
-        negative_prompt_ids: Optional[torch.LongTensor] = None,
+        prompt_embeds_mask: Optional[torch.Tensor] = None,
+        negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds_mask: Optional[torch.LongTensor] = None,        
+        negative_prompt_embeds_mask: Optional[torch.Tensor] = None,        
         # Image encoding arguments
         condition_images: Optional[QwenImageEditPlusImageInput] = None,
         condition_image_sizes: Optional[List[Tuple[int, int]]] = None,
@@ -886,12 +886,12 @@ class QwenImageEditPlusAdapter(BaseAdapter):
         width: int = 1024,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         # Prompt encoding arguments
-        prompt_ids: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
+        prompt_ids: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
         prompt_embeds: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
-        prompt_embeds_mask: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
-        negative_prompt_ids: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,
+        prompt_embeds_mask: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
+        negative_prompt_ids: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
         negative_prompt_embeds: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,
-        negative_prompt_embeds_mask: Optional[Union[List[torch.LongTensor], torch.LongTensor]] = None,        
+        negative_prompt_embeds_mask: Optional[Union[List[torch.Tensor], torch.Tensor]] = None,        
         # Image encoding arguments
         condition_images: Optional[List[QwenImageEditPlusImageInput]] = None, # A batch of condition image lists
         condition_image_sizes: Optional[List[List[Tuple[int, int]]]] = None, # A batch of condition image size lists
