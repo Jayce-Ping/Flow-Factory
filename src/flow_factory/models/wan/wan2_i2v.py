@@ -268,11 +268,11 @@ class Wan2_I2V_Adapter(BaseAdapter):
         if not is_valid_image_batch(images):
             raise ValueError(f"Invalid image input type: {type(images)}. Must be a PIL Image, numpy array, torch tensor, or a list of these types.")
 
-        device = device or self.image_encoder.device
         res = {}
         batch_size = len(images)
         # only Wan 2.1 I2V transformer accepts image_embeds, else None directly
         if self.pipeline.transformer is not None and self.pipeline.transformer.config.image_dim is not None:
+            device = device or self.image_encoder.device
             images = self.pipeline.image_processor(images=images, return_tensors="pt").to(device)
             image_embeds = self.pipeline.image_encoder(**images, output_hidden_states=True)
             res = {
