@@ -616,10 +616,7 @@ class QwenImageEditPlusAdapter(BaseAdapter):
             results.append(padded_prompt_ids)
         return tuple(results)
     
-        # ======================== Sampling / Inference ========================
-
-    # ================================ Inference ================================ #
-
+    # ======================== Sampling / Inference ========================
     # Handle one sample
     @torch.no_grad()
     def _inference(
@@ -910,15 +907,6 @@ class QwenImageEditPlusAdapter(BaseAdapter):
         """
         Batch inference, the input must be in the batch format
         """
-        if not self._has_warned_inference_fallback:
-            logger.warning(
-                "Qwen-Image-Edit-Plus does not support batch inference with varying condition images per sample. "
-                "Falling back to single-sample inference. This warning will only appear once."
-            )
-            self._has_warned_inference_fallback = True
-        # Process each sample individually by calling _inference
-        all_samples = []
-
         batch_size = (
             len(images) if images is not None else
             len(prompt) if prompt is not None else
@@ -928,6 +916,14 @@ class QwenImageEditPlusAdapter(BaseAdapter):
             len(vae_images) if vae_images is not None else 1
         )
 
+        if batch_size > 1:
+            raise ValueError(
+                f"Qwen-Image-Edit-Plus does not support batch_size > 1 for image-to-image tasks! "
+                f"Unexpected error may occur, please set `per_device_batch_size` to `1` for both training and evaluation!"
+            )
+
+        # Process each sample individually by calling _inference
+        all_samples = []
         for b in range(batch_size):
             sample = self._inference(
                 # Extract b-th element from each parameter - be careful to tensors shape.
@@ -1055,7 +1051,7 @@ class QwenImageEditPlusAdapter(BaseAdapter):
                 encoder_hidden_states_mask=prompt_embeds_mask,
                 encoder_hidden_states=prompt_embeds,
                 img_shapes=img_shapes,
-                txt_seq_lens=txt_seq_lens,
+                txt_seq_lens=txt_seq_lens, # No need after diffusers 0.37.0 and will be deprecated in 0.39.0
                 attention_kwargs=attention_kwargs,
                 return_dict=False,
             )[0]
@@ -1072,7 +1068,7 @@ class QwenImageEditPlusAdapter(BaseAdapter):
                     encoder_hidden_states_mask=negative_prompt_embeds_mask,
                     encoder_hidden_states=negative_prompt_embeds,
                     img_shapes=img_shapes,
-                    txt_seq_lens=negative_txt_seq_lens,
+                    txt_seq_lens=negative_txt_seq_lens, # No need after diffusers 0.37.0 and will be deprecated in 0.39.0
                     attention_kwargs=attention_kwargs,
                     return_dict=False,
                 )[0]
@@ -1165,21 +1161,14 @@ class QwenImageEditPlusAdapter(BaseAdapter):
                 noise_level=noise_level,
             )
 
-        # Ragged I2I: process one by one
-        if not self._has_warned_forward_fallback:
-            logger.warning(
-                "Qwen-Image-Edit-Plus: Ragged I2I detected (varying condition image sizes). "
-                "Processing samples individually (warning shown once)."
-            )
-            self._has_warned_forward_fallback = True
-
+        # I2I: process one by one
         batch_size = len(latents)
-        if batch_size > 1 or isinstance(latents, list):
+        if batch_size > 1:
             first_latent_shape = latents[0].shape
             if not all(first_latent_shape == lat.shape for lat in latents[1:]):
                 raise ValueError(
-                    f"Qwen-Image-Edit-Plus does not support training batch size > 1 for varing size of output images! "
-                    f"Unexpected error may occur, please set `train:per_device_batch_size` to `1`!"
+                    f"Qwen-Image-Edit-Plus does not support batch_size > 1 for image-to-image tasks! "
+                    f"Unexpected error may occur, please set `per_device_batch_size` to `1` for both training and evaluation!"
                 )
 
         outputs = []

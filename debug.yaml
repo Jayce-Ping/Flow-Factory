@@ -50,7 +50,7 @@ train:
   condition_image_size: 256
   auto_resize: false
   # Batch and sampling
-  per_device_batch_size: 2  # Batch size per device. For image-to-image task, this will always fallback to 1.
+  per_device_batch_size: 1  # Batch size per device. For image-to-image task, this will always fallback to 1.
   group_size: 8  # Group size for GRPO sampling
   global_std: false  # Use global std for advantage normalization
   unique_sample_num_per_epoch: 8  # Unique samples per group
@@ -94,7 +94,7 @@ scheduler:
 eval:
   resolution: 256  # Evaluation resolution
   condition_image_size: 256
-  per_device_batch_size: 2  # Eval batch size
+  per_device_batch_size: 1  # Eval batch size
   seed: 42  # Eval seed (defaults to training seed)
   guidance_scale: 4.0  # Guidance scale for sampling
   num_inference_steps: 28  # Number of eval timesteps
