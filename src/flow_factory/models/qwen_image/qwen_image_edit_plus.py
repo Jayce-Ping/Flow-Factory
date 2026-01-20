@@ -1174,6 +1174,14 @@ class QwenImageEditPlusAdapter(BaseAdapter):
             self._has_warned_forward_fallback = True
 
         batch_size = latents.shape[0]
+        if batch_size > 1 and isinstance(latents, list):
+            first_latent_shape = latents[0].shape
+            if not all(first_latent_shape == lat.shape for lat in latents[1:]):
+                raise ValueError(
+                    f"Qwen-Image-Edit-Plus does not support training batch size > 1 for varing size of output images! "
+                    f"Unexpected error may occur, please set `train:per_device_batch_size` to `1`!"
+                )
+
         outputs = []
 
         for idx in range(batch_size):

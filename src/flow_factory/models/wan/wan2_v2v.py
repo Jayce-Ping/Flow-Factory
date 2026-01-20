@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import os
-from typing import Union, List, Dict, Any, Optional, Tuple, Literal
+from typing import Union, List, Dict, Any, Optional, Tuple, Literal, ClassVar
 from dataclasses import dataclass
 import logging
 from collections import defaultdict
@@ -58,7 +58,10 @@ WanPipelineVideoInput = Union[
 
 @dataclass
 class WanV2VSample(V2VSample):
-    pass
+    """Sample dataclass for Wan V2V outputs."""
+    _shared_fields: ClassVar[frozenset[str]] = frozenset({'strength', 'num_inference_steps'})
+    strength: Optional[float] = None
+    num_inference_steps: Optional[int] = None
 
 class Wan2_V2V_Adapter(BaseAdapter):
     def __init__(self, config: Arguments, accelerator : Accelerator):
@@ -370,51 +373,35 @@ class Wan2_V2V_Adapter(BaseAdapter):
         extra_call_back_res = defaultdict(list)
 
         for i, t in enumerate(timesteps):
-            self.pipeline._current_timestep = t
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
-            timestep = t.expand(latents.shape[0])
+            t_next = timesteps[i + 1] if i + 1 < len(timesteps) else torch.tensor(0, device=device)
+            return_kwargs = list(set(['next_latents', 'log_prob', 'noise_pred'] + extra_call_back_kwargs))
 
-            latent_model_input = latents.to(dtype=dtype)
-            noise_pred = self.transformer(
-                hidden_states=latent_model_input,
-                timestep=timestep,
-                encoder_hidden_states=prompt_embeds,
-                attention_kwargs=attention_kwargs,
-                return_dict=False,
-            )[0]
-
-            if do_classifier_free_guidance:
-                noise_uncond = self.transformer(
-                    hidden_states=latent_model_input,
-                    timestep=timestep,
-                    encoder_hidden_states=negative_prompt_embeds,
-                    attention_kwargs=attention_kwargs,
-                    return_dict=False,
-                )[0]
-                noise_pred = noise_uncond + guidance_scale * (noise_pred - noise_uncond)
-
-            # compute the previous noisy sample x_t -> x_t-1
-            output = self.scheduler.step(
-                noise_pred=noise_pred,
-                timestep=t,
+            output = self.forward(
+                t=t,
+                t_next=t_next,
                 latents=latents,
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                guidance_scale=guidance_scale,
+                attention_kwargs=attention_kwargs,
                 compute_log_prob=compute_log_prob and current_noise_level > 0,
+                return_kwargs=return_kwargs,
+                noise_level=current_noise_level,
             )
+
             latents = output.next_latents
             all_latents.append(latents)
-            
+
             if compute_log_prob:
                 all_log_probs.append(output.log_prob)
 
-            # call extra callbacks
             if extra_call_back_kwargs:
-                capturable = {'noise_pred': noise_pred, 'noise_levels': current_noise_level}
+                capturable = {'noise_level': current_noise_level}
                 for key in extra_call_back_kwargs:
                     if key in capturable and capturable[key] is not None:
-                        # First check in capturable dict
                         extra_call_back_res[key].append(capturable[key])
                     elif hasattr(output, key):
-                        # Then check in output
                         val = getattr(output, key)
                         if val is not None:
                             extra_call_back_res[key].append(val)
@@ -441,31 +428,24 @@ class Wan2_V2V_Adapter(BaseAdapter):
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0),
                 timesteps=timesteps,
                 log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if compute_log_prob else None,
-
                 # Generated video & metadata
                 video=decoded_videos[b],
                 height=height,
                 width=width,
-
                 # Prompt info
                 prompt=prompt[b] if isinstance(prompt, list) else prompt,
                 prompt_ids=prompt_ids[b],
                 prompt_embeds=prompt_embeds[b],
-
                 # Negative prompt info
                 negative_prompt=negative_prompt[b] if isinstance(negative_prompt, list) else negative_prompt,
                 negative_prompt_ids=negative_prompt_ids[b] if negative_prompt_ids is not None else None,
                 negative_prompt_embeds=negative_prompt_embeds[b] if negative_prompt_embeds is not None else None,
-
                 # Condition Video
                 condition_videos=videos[b],
-
                 # Extra kwargs
+                strength=strength,
+                num_inference_steps=input_inference_steps,
                 extra_kwargs={
-                    'num_inference_steps': input_inference_steps, # Original input num_inference_steps
-                    'strength': strength,
-                    'guidance_scale': guidance_scale,
-                    'attention_kwargs': attention_kwargs,
                     **{k: v[b] for k, v in extra_call_back_res.items()}
                 },
             )
@@ -479,41 +459,55 @@ class Wan2_V2V_Adapter(BaseAdapter):
     # =========================== Forward ===========================
     def forward(
         self,
-        samples: List[WanV2VSample],
-        timestep_index : int,
+        t: torch.Tensor,
+        t_next: torch.Tensor,
+        latents: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        # Optional for CFG
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        guidance_scale: float = 5.0,
+        # Other
+        next_latents: Optional[torch.Tensor] = None,
+        noise_level: Optional[float] = None,
+        attention_kwargs: Optional[Dict[str, Any]] = None,
         compute_log_prob: bool = True,
-        **kwargs,
+        return_kwargs: List[str] = ['noise_pred', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt', 'log_prob'],
     ) -> UniPCMultistepSDESchedulerOutput:
-        # 1. Extract data from samples
-        batch_size = len(samples)
-        device = self.device
-        dtype = self.pipeline.transformer.dtype if self.pipeline.transformer is not None else self.pipeline.transformer_2.dtype
-        # Assume all samples have the same guidance scale
-        guidance_scale = samples[0].extra_kwargs.get('guidance_scale', self.training_args.guidance_scale)
-        do_classifier_free_guidance = guidance_scale > 1.0
-        # Assume all samples have the same attention kwargs
-        attention_kwargs = samples[0].extra_kwargs.get('attention_kwargs', {})
-        strength = samples[0].extra_kwargs['strength']
-        num_inference_steps = samples[0].extra_kwargs['num_inference_steps']
+        """
+        Core forward pass for V2V generation.
 
-        # Stack latents and timesteps
-        latents = torch.stack([s.all_latents[timestep_index] for s in samples], dim=0).to(device)
-        next_latents = torch.stack([s.all_latents[timestep_index + 1] for s in samples], dim=0).to(device)
-        
-        # Get prompt embeddings
-        prompt_embeds = torch.stack([s.prompt_embeds for s in samples], dim=0).to(device=device,dtype=dtype)
-        negative_prompt_embeds = (
-            torch.stack([s.negative_prompt_embeds for s in samples], dim=0).to(device=device,dtype=dtype)
-            if samples[0].negative_prompt_embeds is not None else None
+        Args:
+            t: Current timestep tensor.
+            t_next: Next timestep tensor.
+            latents: Current latent representations (B, C, T, H, W).
+            prompt_embeds: Text prompt embeddings.
+            negative_prompt_embeds: Optional negative prompt embeddings (for CFG).
+            guidance_scale: CFG scale factor.
+            next_latents: Optional target latents for log-prob computation.
+            noise_level: Current noise level for SDE sampling.
+            attention_kwargs: Optional kwargs for attention layers.
+            compute_log_prob: Whether to compute log probabilities.
+            return_kwargs: List of outputs to return.
+
+        Returns:
+            UniPCMultistepSDESchedulerOutput containing requested outputs.
+        """
+        # 1. Prepare variables
+        batch_size = latents.shape[0]
+        sigma = t / 1000
+        sigma_prev = t_next / 1000
+        device = latents.device
+        dtype = self.pipeline.transformer.dtype
+
+        do_classifier_free_guidance = (
+            negative_prompt_embeds is not None and guidance_scale > 1.0
         )
 
-        # 2. Set scheduler timesteps
-        timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, device)
-        timestep = timesteps[timestep_index].expand(batch_size)
-        t = timestep[0]
+        # 2. Prepare timestep
+        timestep = t.expand(batch_size)
+        latent_model_input = latents.to(dtype)
 
-        # 3. Predict noise
-        latent_model_input = latents.to(dtype=dtype)
+        # 3. Transformer forward pass
         noise_pred = self.transformer(
             hidden_states=latent_model_input,
             timestep=timestep,
@@ -522,6 +516,7 @@ class Wan2_V2V_Adapter(BaseAdapter):
             return_dict=False,
         )[0]
 
+        # 4. Apply CFG
         if do_classifier_free_guidance:
             noise_uncond = self.transformer(
                 hidden_states=latent_model_input,
@@ -532,16 +527,17 @@ class Wan2_V2V_Adapter(BaseAdapter):
             )[0]
             noise_pred = noise_uncond + guidance_scale * (noise_pred - noise_uncond)
 
-        # 4. Compute previous noisy sample x_t -> x_t-1
-        step_kwargs = filter_kwargs(self.scheduler.step, **kwargs)
+        # 5. Scheduler step
         output = self.scheduler.step(
             noise_pred=noise_pred,
-            timestep=t,
+            sigma=sigma,
+            sigma_prev=sigma_prev,
             latents=latents,
             next_latents=next_latents,
             compute_log_prob=compute_log_prob,
             return_dict=True,
-            **step_kwargs,
+            return_kwargs=return_kwargs,
+            noise_level=noise_level,
         )
 
         return output

@@ -251,8 +251,8 @@ class Flux2Adapter(BaseAdapter):
                 dtype=dtype,
                 generator=generator,
             )
-            image_latents_list.append(image_latents)
-            image_latent_ids_list.append(image_latent_ids)
+            image_latents_list.append(image_latents.squeeze(0))
+            image_latent_ids_list.append(image_latent_ids.squeeze(0))
         
         # Convert back to [0, 1] range tensors for storage
         condition_image_tensors: List[List[torch.Tensor]] = [
@@ -265,8 +265,8 @@ class Flux2Adapter(BaseAdapter):
         
         return {
             'condition_images': condition_image_tensors,  # List[List[torch.Tensor(3, H, W)]]
-            'image_latents': image_latents_list,          # List[torch.Tensor(1, seq_len, C)]
-            'image_latent_ids': image_latent_ids_list,    # List[torch.Tensor(1, seq_len, 3)]
+            'image_latents': image_latents_list,          # List[torch.Tensor(seq_len, C)]
+            'image_latent_ids': image_latent_ids_list,    # List[torch.Tensor(seq_len, 3)]
         }
     
     def _resize_condition_images(
@@ -301,6 +301,45 @@ class Flux2Adapter(BaseAdapter):
 
         return condition_image_tensors
 
+    @staticmethod
+    def _is_nested_images_batch(images : Union[Flux2ImageInput, List[Flux2ImageInput]]):
+        is_nested_batch = (
+            (isinstance(images, list) and len(images) > 0 and isinstance(images[0], list))
+            or (isinstance(images, torch.Tensor) and images.ndim == 5)
+            or (isinstance(images, np.ndarray) and images.ndim == 5)
+        )
+        return is_nested_batch
+
+    @staticmethod
+    def _is_ragged_images_batch(images : Union[Flux2ImageInput, List[Flux2ImageInput]]):
+        is_ragged_batch = (
+            ( isinstance(images, list) and len(images) > 0 and isinstance(images[0], list) ) # List[List[Image]]
+            or
+            ( isinstance(images, list) and len(images) > 0 and isinstance(images[0], torch.Tensor) and images[0].ndim == 4 ) # List[torch.Tensor : ndim=4]
+        )
+        return is_ragged_batch
+
+    @staticmethod
+    def _is_nestedd_image_latents(image_latents: Union[torch.Tensor, List[torch.Tensor]]):
+        is_ragged_image_latents = (
+            (
+                isinstance(image_latents, list) and len(image_latents) > 0
+                and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 2
+            ) # List[torch.Tensor : ndim=2 (seq_len, C)]
+            or (
+                isinstance(image_latents, torch.Tensor) and image_latents.ndim == 3
+             ) # torch.Tensor : ndim=3 (B, seq_len, C)
+        )
+        return is_ragged_image_latents
+
+    @staticmethod
+    def _is_ragged_image_latents(image_latents: Union[torch.Tensor, List[torch.Tensor]]):
+        is_ragged_image_latents = (
+            isinstance(image_latents, list) and len(image_latents) > 0
+            and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 2
+        ) # List[torch.Tensor : ndim=2 (seq_len, C)]
+        return is_ragged_image_latents
+    
     def _standardize_image_input(
         self,
         images: Flux2ImageInput,
@@ -315,7 +354,7 @@ class Flux2Adapter(BaseAdapter):
         return standardize_image_batch(
             images,
             output_type=output_type,
-        )    
+        )
     # ------------------------- Video Encoding ------------------------
     def encode_video(self, videos: Any, **kwargs) -> None:
         """Flux.2 does not support video encoding."""
@@ -405,7 +444,7 @@ class Flux2Adapter(BaseAdapter):
     def _inference(
         self,
         # Ordinary arguments
-        images: Optional[Flux2ImageInput] = None,
+        images: Optional[List[Flux2ImageInput]] = None, # A batch of condition images
         prompt: Union[str, List[str]] = None,
         height: int = 1024,
         width: int = 1024,
@@ -417,14 +456,14 @@ class Flux2Adapter(BaseAdapter):
         prompt_embeds: Optional[torch.Tensor] = None,
         text_ids: Optional[torch.Tensor] = None,
         # Image encoding arguments
-        condition_images: Optional[Flux2ImageInput] = None,
+        condition_images: Optional[List[Flux2ImageInput]] = None,
         image_latents: Optional[torch.Tensor] = None,
         image_latent_ids: Optional[torch.Tensor] = None,
         # Other arguments
         condition_image_size : Union[int, Tuple[int, int]] = CONDITION_IMAGE_SIZE,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         max_sequence_length: int = 512,
-        text_encoder_out_layers: Tuple[int] = (10, 20, 30),
+        text_encoder_out_layers: Tuple[int, ...] = (10, 20, 30),
         caption_upsample_temperature: Optional[float] = None,
         compute_log_prob: bool = False,
         # Extra callback arguments
@@ -439,8 +478,7 @@ class Flux2Adapter(BaseAdapter):
         if isinstance(prompt, str):
             prompt = [prompt]
         
-        if images is not None:
-            images = self._standardize_image_input(images, output_type='pil')
+        images = [images] if images is not None and not self._is_nested_images_batch(images) else images
 
         if (
             (prompt is not None and (prompt_embeds is None or text_ids is None))
@@ -458,14 +496,26 @@ class Flux2Adapter(BaseAdapter):
             prompt_ids = encode_dict['prompt_ids']
             prompt_embeds = encode_dict['prompt_embeds']
             text_ids = encode_dict['text_ids']
-            condition_images = encode_dict['condition_images'][0] if encode_dict.get('condition_images', None) is not None else None
-            image_latents = encode_dict['image_latents'][0] if encode_dict.get('image_latents', None) is not None else None
-            image_latent_ids = encode_dict['image_latent_ids'][0] if encode_dict.get('image_latent_ids', None) is not None else None
+            # Potential issue: the following stack relies on uniform size of input condition images
+            condition_images = (
+                encode_dict['condition_images'] # List[List[torch.Tensor(3, H, W)]] with len B
+                if encode_dict.get('condition_images', None) is not None
+                else None
+            )
+            image_latents = (
+                torch.stack(encode_dict['image_latents'], dim=0) # torch.Tensor(B, seq_len, C)
+                if encode_dict.get('image_latents', None) is not None
+                else None
+            )
+            image_latent_ids = (
+                torch.stack(encode_dict['image_latent_ids'], dim=0) # torch.Tensor(B, seq_len, 3)
+                if encode_dict.get('image_latent_ids', None) is not None
+                else None
+            )
         else:
             prompt_ids = prompt_ids.to(device)
             prompt_embeds = prompt_embeds.to(device)
             text_ids = text_ids.to(device)
-            condition_images = self._standardize_image_input(condition_images, output_type='pt')
             image_latents = image_latents.to(device) if image_latents is not None else None
             image_latent_ids = image_latent_ids.to(device) if image_latent_ids is not None else None
 
@@ -567,7 +617,7 @@ class Flux2Adapter(BaseAdapter):
                 prompt_embeds=prompt_embeds[b],
                 text_ids=text_ids[b],
                 # Condition images & latents
-                condition_images=condition_images if condition_images is not None else None, # The condition images are shared and without batch dimension
+                condition_images=condition_images[b] if condition_images is not None else None, # The condition images are shared and without batch dimension
                 image_latents=image_latents[b] if image_latents is not None else None, # If not None, it has batch dim 1
                 image_latent_ids=image_latent_ids[b] if image_latent_ids is not None else None, # If not None, it has batch dim 1
                 # Extra kwargs
@@ -612,26 +662,17 @@ class Flux2Adapter(BaseAdapter):
         """Batch inference for Flux2"""
         if isinstance(prompt, str):
             prompt = [prompt]
-        # Check for ragged inputs that require per-sample processing
-        is_ragged_images = (
-            ( isinstance(images, list) and len(images) > 0 and isinstance(images[0], list) ) # List[List[Image]]
-            or
-            ( isinstance(images, list) and len(images) > 0 and isinstance(images[0], (np.ndarray, torch.Tensor)) and images[0].ndim == 4 ) # List[torch.Tensor : ndim=4]
-            or
-            ( isinstance(images, (torch.Tensor, np.ndarray)) and images.ndim == 5 ) # torch.Tensor : ndim=5
-        )
-        is_ragged_image_latents = (
-            (
-                isinstance(image_latents, list) and len(image_latents) > 0
-                and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 3
-            ) # List[torch.Tensor : ndim=3 (B, seq_len, C)]
-            or
-            (
-                isinstance(image_latents, torch.Tensor) and image_latents.ndim == 4
-            ) # torch.Tensor : ndim=4 (N, B, seq_len, C)
-        )
-        if not (is_ragged_images or is_ragged_image_latents):
-            # Images are shared across the batch or just T2I
+        # # Approach 1: Fallback for ragged I2I
+        # is_ragged_images = self._is_ragged_images_batch(images)
+        # is_ragged_image_latents = self._is_ragged_image_latents(images)
+        # fall_back = (is_ragged_images or is_ragged_image_latents)
+
+        # Approach 2: Fallback for all I2I, this is good for asynchronization among processes
+        is_nested_images = self._is_nested_images_batch(images)
+        is_nested_image_latents = self._is_nestedd_image_latents(image_latents)
+        fall_back = (is_nested_images or is_nested_image_latents)
+        if not fall_back:
+            # batched T2I or uniformed I2I
             return self._inference(
                 # Ordinary args
                 images=images,
@@ -666,27 +707,38 @@ class Flux2Adapter(BaseAdapter):
             )
             self._has_warned_inference_fallback = True
         # Process each sample individually by calling _inference
-        batch_size = len(images) if is_ragged_images else len(image_latents)
+        batch_size = len(images) if images is not None else len(image_latents)
 
         samples = []
         for idx in range(batch_size):
+            # Extract single sample tensors -  keep batch dimension as 1
+            # Prompt
+            this_prompt = prompt[idx] if prompt is not None else None
+            this_prompt_ids = prompt_ids[idx].unsqueeze(0) if prompt_ids is not None else None
+            this_prompt_embeds = prompt_embeds[idx].unsqueeze(0) if prompt_embeds is not None else None
+            this_text_ids = text_ids[idx].unsqueeze(0) if text_ids is not None else None
+            # Image
+            this_images=images[idx] if images is not None else None # No batch dimension for `images`
+            this_condition_images=condition_images[idx:idx+1] if condition_images is not None else None
+            this_image_latents=image_latents[idx].unsqueeze(0) if image_latents is not None else None
+            this_image_latent_ids=image_latent_ids[idx].unsqueeze(0) if image_latent_ids is not None else None
             sample = self._inference(
                 # Ordinary args
-                images=images[idx] if images is not None else None,
-                prompt=prompt[idx] if prompt is not None else None,
+                images=this_images,
+                prompt=this_prompt,
                 height=height,
                 width=width,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
                 generator=generator[idx] if isinstance(generator, list) else generator,
                 # Encoded prompt
-                prompt_ids=prompt_ids[idx:idx+1] if prompt_ids is not None else None, # Keep batch dim as 1
-                prompt_embeds=prompt_embeds[idx:idx+1] if prompt_embeds is not None else None,
-                text_ids=text_ids[idx:idx+1] if text_ids is not None else None,
+                prompt_ids=this_prompt_ids, # Keep batch dim as 1
+                prompt_embeds=this_prompt_embeds,
+                text_ids=this_text_ids,
                 # Encoded image
-                condition_images=condition_images[idx] if condition_images is not None else None,
-                image_latents=image_latents[idx] if image_latents is not None else None,
-                image_latent_ids=image_latent_ids[idx] if image_latent_ids is not None else None,
+                condition_images=this_condition_images,
+                image_latents=this_image_latents,
+                image_latent_ids=this_image_latent_ids,
                 # Other args
                 joint_attention_kwargs=joint_attention_kwargs,
                 max_sequence_length=max_sequence_length,
@@ -806,20 +858,15 @@ class Flux2Adapter(BaseAdapter):
         """
         General forward method handling both T2I and I2I, including ragged I2I batches.
         """
-        # Check if I2I
-        is_batched_multi_image_latents = (
-            (
-                isinstance(image_latents, list) and len(image_latents) > 0
-                and isinstance(image_latents[0], torch.Tensor) and image_latents[0].ndim == 3
-            ) # List[torch.Tensor : ndim=3 (B, seq_len, C)]
-            or
-            (
-                isinstance(image_latents, torch.Tensor) and image_latents.ndim == 4
-            ) # torch.Tensor : ndim=4 (B, 1, seq_len, C)
-        )
+        # # Approach 1: Fallback only when ragged I2I
+        # is_ragged_multi_image_latents = self._is_ragged_image_latents(image_latents)
+        # fall_back = is_ragged_multi_image_latents
 
-        if not is_batched_multi_image_latents:
-            # T2I: call _forward() directly
+        # Approach 2: Fallback for all I2I, this is good for asynchronization among processes
+        fall_back = image_latents is not None
+
+        if not fall_back:
+            # T2I or uniform I2I, call _forward() directly
             return self._forward(
                 t=t,
                 t_next=t_next,
@@ -849,17 +896,24 @@ class Flux2Adapter(BaseAdapter):
         outputs = []
 
         for idx in range(batch_size):
+            # Extract single sample tensors -  keep batch dimension as 1
+            # Timestep
+            single_t = t[idx].unsqueeze(0)
+            single_t_next = t_next[idx].unsqueeze(0)
+            # Latents
             single_latents = latents[idx].unsqueeze(0)
             single_latent_ids = latent_ids[idx].unsqueeze(0)
+            single_next_latents = next_latents[idx].unsqueeze(0) if next_latents is not None else None
+            # Prompt
             single_prompt_embeds = prompt_embeds[idx].unsqueeze(0)
             single_text_ids = text_ids[idx].unsqueeze(0)
+            # Condtion Images
             single_image_latents = image_latents[idx].unsqueeze(0) if image_latents[idx] is not None else None
             single_image_latent_ids = image_latent_ids[idx].unsqueeze(0) if image_latent_ids is not None and image_latent_ids[idx] is not None else None
-            single_next_latents = next_latents[idx].unsqueeze(0) if next_latents is not None else None
 
             out = self._forward(
-                t=t,
-                t_next=t_next,
+                t=single_t,
+                t_next=single_t_next,
                 latents=single_latents,
                 latent_ids=single_latent_ids,
                 prompt_embeds=single_prompt_embeds,
