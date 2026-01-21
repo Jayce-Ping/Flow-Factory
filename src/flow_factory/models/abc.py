@@ -1399,6 +1399,8 @@ class BaseAdapter(ABC):
                 if self.model_args.target_modules in [None, 'default']:
                     # If default, infer target modules
                     target_modules = infer_target_modules(state_dict)
+                else:
+                    target_modules = self.model_args.target_modules
                 
                 if self.accelerator.is_main_process:
                     logger.info(
