@@ -1405,7 +1405,7 @@ class BaseAdapter(ABC):
                 if self.accelerator.is_main_process:
                     logger.info(
                         f"Inferred LoRA config for {comp_name}: "
-                        f"rank={lora_rank}, alpha={lora_alpha}, target_modules={target_modules}"
+                        f"rank={lora_rank}, alpha={lora_alpha}, target_modules={target_modules[:5]}..."
                     )
                 
                 # Create PeftModel if not already
