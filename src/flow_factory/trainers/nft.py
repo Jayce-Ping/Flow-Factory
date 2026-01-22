@@ -29,6 +29,7 @@ import tqdm as tqdm_
 tqdm = partial(tqdm_.tqdm, dynamic_ncols=True)
 
 from .abc import BaseTrainer
+from .grpo import GRPOTrainer
 from ..models.abc import BaseSample
 from ..utils.base import filter_kwargs, create_generator, to_broadcast_tensor
 from ..utils.logger_utils import setup_logger
@@ -38,7 +39,7 @@ logger = setup_logger(__name__)
 
 
 
-class DiffusionNFTTrainer(BaseTrainer):
+class DiffusionNFTTrainer(GRPOTrainer):
     """
     DiffusionNFT Trainer with off-policy and continuous timestep support.
     Reference: https://arxiv.org/abs/2509.16117
@@ -140,6 +141,7 @@ class DiffusionNFTTrainer(BaseTrainer):
             self.adapter.ema_step(step=self.epoch)
             self.epoch += 1
 
+    # =========================== Sampling Loop ============================
     def sample(self) -> List[BaseSample]:
         """Generate rollouts for DiffusionNFT."""
         self.adapter.rollout()
@@ -166,94 +168,7 @@ class DiffusionNFTTrainer(BaseTrainer):
 
         return samples
 
-    # Copied from src.flow_factory.trainers.grpo.GRPOTrainer.compute_advantages.
-    def compute_advantages(self, samples: List[BaseSample], rewards: Dict[str, torch.Tensor], store_to_samples: bool = True) -> torch.Tensor:
-        """
-        Compute advantages for DiffusionNFT.
-        Args:
-            samples: List of BaseSample instances
-            rewards: Dict of reward_name to reward tensors - these should be aligned with samples
-        Returns:
-            advantages: Tensor of shape (num_samples, ) with computed advantages
-
-        Notes:
-            - If you want to customize advantage computation (e.g., different normalization),
-            you can override this method in a subclass, e.g., for GDPO.
-        """
-        # 1. Get rewards
-        rewards = {key: torch.as_tensor(value).to(self.accelerator.device) for key, value in rewards.items()}
-        gathered_rewards = {
-            key: self.accelerator.gather(value).cpu().numpy()
-            for key, value in rewards.items()
-        }
-
-        # 2. Aggregate rewards if multiple reward models
-        aggregated_rewards = np.zeros_like(next(iter(gathered_rewards.values())), dtype=np.float64)
-        for key, reward_array in gathered_rewards.items():
-            # Simple weighted sum
-            aggregated_rewards += reward_array * self.reward_models[key].config.weight
-
-        # 3. Group rewards by unique_ids - each sample has its `unique_id` hashed from its prompt, conditioning, etc.
-        unique_ids = torch.tensor([s.unique_id for s in samples], dtype=torch.int64, device=self.accelerator.device)
-        gathered_ids = self.accelerator.gather(unique_ids).cpu().numpy()
-        _unique_ids, group_indices, _counts = np.unique(gathered_ids, return_inverse=True, return_counts=True)
-        
-        # 4. Compute advantages within each group
-        advantages = np.zeros_like(aggregated_rewards, dtype=np.float64)
-
-        if self.training_args.global_std:
-            std = max(np.std(aggregated_rewards, axis=0, keepdims=True), 1e-6)
-
-        for group_id in np.unique(group_indices):
-            mask = (group_indices == group_id)
-            group_rewards = aggregated_rewards[mask]
-            assert len(group_rewards) == self.training_args.group_size, \
-                f"Group size mismatch: expected {self.training_args.group_size}, got {len(group_rewards)}"
-
-            mean = np.mean(group_rewards, axis=0, keepdims=True)
-            if not self.training_args.global_std:
-                std = max(np.std(group_rewards, axis=0, keepdims=True), 1e-6)
-            
-            advantages[mask] = (group_rewards - mean) / std
-
-        # 5. Log statistics
-        # Log per-reward mean
-        _log_data = {
-            f'train/reward_{key}_mean': np.mean(value)
-            for key, value in gathered_rewards.items()
-        }
-        # Log per-reward std
-        _log_data.update({
-            f'train/reward_{key}_std': np.std(value)
-            for key, value in gathered_rewards.items()
-        })
-        # Log aggregated reward zero std ratio
-        zero_std_ratio = self.reward_processor.compute_group_zero_std_ratio(aggregated_rewards, group_indices)
-        _log_data['train/reward_zero_std_ratio'] = zero_std_ratio
-        # Log other stats
-        _log_data.update({
-            'train/reward_mean': np.mean(aggregated_rewards),
-            'train/reward_std': np.std(aggregated_rewards),
-            'train/adv_max': np.max(advantages),
-            'train/adv_min': np.min(advantages),
-            'train/adv_abs_mean': np.mean(np.abs(advantages)),
-        })
-        _log_data['train_samples'] = samples[:30]
-
-        self.log_data(_log_data, step=self.step)
-
-        # 6. Scatter advantages back to align with samples
-        advantages = torch.as_tensor(advantages).reshape(
-            self.accelerator.num_processes, -1, *advantages.shape[1:]
-        )[self.accelerator.process_index].to(self.accelerator.device)
-
-        # Store advantages to samples' extra_kwargs
-        if store_to_samples:
-            for sample, adv in zip(samples, advantages):
-                sample.extra_kwargs['advantage'] = adv
-
-        return advantages
-
+    # =========================== Optimization Loop ============================
     def _compute_nft_output(
         self,
         batch: Dict[str, Any],
@@ -408,51 +323,3 @@ class DiffusionNFTTrainer(BaseTrainer):
                 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-
-    def evaluate(self) -> None:
-        """Evaluation loop."""
-        if self.test_dataloader is None:
-            return
-        
-        self.adapter.eval()
-        with self.adapter.use_ema_parameters():
-            all_samples: List[BaseSample] = []
-            
-            for batch in tqdm(
-                self.test_dataloader,
-                desc='Evaluating', 
-                disable=not self.accelerator.is_local_main_process
-            ):
-                generator = create_generator(batch['prompt'], self.training_args.seed)
-                inference_kwargs = {
-                    'compute_log_prob': False,
-                    'generator': generator,
-                    **self.eval_args,
-                    **batch,
-                }
-                inference_kwargs = filter_kwargs(self.adapter.inference, **inference_kwargs)
-                with torch.no_grad(), self.autocast():
-                    samples = self.adapter.inference(**inference_kwargs)
-                all_samples.extend(samples)
-            
-            rewards = self.eval_reward_processor.compute_rewards(
-                samples=all_samples,
-                store_to_samples=False,
-                epoch=self.epoch,
-                split='pointwise',  # Only `pointwise` reward can be compute when evaluation, since there is no `group` here.
-            )
-            # Gather and log rewards
-            rewards = {key: torch.as_tensor(value).to(self.accelerator.device) for key, value in rewards.items()}
-            gathered_rewards = {
-                key: self.accelerator.gather(value).cpu().numpy()
-                for key, value in rewards.items()
-            }
-
-            # Log statistics
-            if self.accelerator.is_main_process:
-                _log_data = {f'eval/reward_{key}_mean': np.mean(value) for key, value in gathered_rewards.items()}
-                _log_data.update({f'eval/reward_{key}_std': np.std(value) for key, value in gathered_rewards.items()})
-                _log_data['eval_samples'] = all_samples
-                self.log_data(_log_data, step=self.step)
-            
-            self.accelerator.wait_for_everyone()

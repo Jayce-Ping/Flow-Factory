@@ -120,6 +120,40 @@ class AWMTrainer(GRPOTrainer):
             self.adapter.ema_step(step=self.epoch)
             self.epoch += 1
 
+    def _sample_timesteps(self, batch_size: int) -> torch.Tensor:
+        """
+        Sample continuous timesteps based on configured time_type.
+        
+        Args:
+            batch_size: Number of samples in the batch.
+        
+        Returns:
+            Tensor of shape (num_train_timesteps, batch_size) with t in (0, 1).
+        """
+        device = self.accelerator.device
+        time_type = self.time_type.lower()
+        
+        if time_type == 'logit_normal':
+            t = TimeSampler.logit_normal_shifted(
+                batch_size=batch_size,
+                num_timesteps=self.num_train_timesteps,
+                shift=self.time_shift,
+                device=device,
+                stratified=True,
+            )
+        elif time_type == 'uniform':
+            t = TimeSampler.uniform(
+                batch_size=batch_size,
+                num_timesteps=self.num_train_timesteps,
+                shift=self.time_shift,
+                device=device,
+            )
+        else:
+            raise ValueError(f"Unknown time_type: {self.time_type}, available: ['logit_normal', 'uniform']")
+        
+        return t  # (num_train_timesteps, batch_size)
+    
+    # =========================== Sampling Loop ============================
     def sample(self) -> List[BaseSample]:
         """Generate rollouts for AWM training."""
         self.adapter.rollout()
@@ -146,6 +180,7 @@ class AWMTrainer(GRPOTrainer):
 
         return samples
 
+    # =========================== Optimization Loop ============================
     @staticmethod
     def compute_weighted_log_prob(
         model_output: torch.Tensor,
@@ -194,39 +229,6 @@ class AWMTrainer(GRPOTrainer):
             raise ValueError(f"Unknown weighting method: {weighting}")
         
         return log_prob.float()
-
-    def _sample_timesteps(self, batch_size: int) -> torch.Tensor:
-        """
-        Sample continuous timesteps based on configured time_type.
-        
-        Args:
-            batch_size: Number of samples in the batch.
-        
-        Returns:
-            Tensor of shape (num_train_timesteps, batch_size) with t in (0, 1).
-        """
-        device = self.accelerator.device
-        time_type = self.time_type.lower()
-        
-        if time_type == 'logit_normal':
-            t = TimeSampler.logit_normal_shifted(
-                batch_size=batch_size,
-                num_timesteps=self.num_train_timesteps,
-                shift=self.time_shift,
-                device=device,
-                stratified=True,
-            )
-        elif time_type == 'uniform':
-            t = TimeSampler.uniform(
-                batch_size=batch_size,
-                num_timesteps=self.num_train_timesteps,
-                shift=self.time_shift,
-                device=device,
-            )
-        else:
-            raise ValueError(f"Unknown time_type: {self.time_type}, available: ['logit_normal', 'uniform']")
-        
-        return t  # (num_train_timesteps, batch_size)
 
     def _compute_awm_output(
         self,
