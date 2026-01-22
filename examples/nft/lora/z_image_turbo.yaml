@@ -40,6 +40,10 @@ train:
   # Trainer settings
   trainer_type: 'nft'
   nft_beta: 1
+  # Training Timestep distribution
+  num_train_timesteps: 4 # Default to all steps
+  time_type: Uniform
+  time_shift: 3.0
   # KL div
   kl_type: 'v-based'
   kl_beta: 0 # KL divergence beta, 0 to disable
@@ -80,11 +84,7 @@ train:
 
 # Scheduler Configuration
 scheduler:
-  dynamics_type: "Flow-SDE"  # Options: Flow-SDE, Dance-SDE, CPS, ODE
-  noise_level: 0.9  # Noise level for sampling
-  num_train_steps: 1  # Number of noise steps
-  train_steps: [1, 2, 3]  # Custom noise window, noise steps are randomly selected from this list during training
-  seed: 42  # Scheduler seed (for noise step selection)
+  dynamics_type: "ODE"  # Options: Flow-SDE, Dance-SDE, CPS, ODE
 
 # Evaluation settings
 eval:
