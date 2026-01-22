@@ -178,10 +178,12 @@ class AWMTrainer(GRPOTrainer):
                 self.evaluate()
 
             # Sample with EMA model if off-policy
-            if self.off_policy:
-                with self.adapter.use_ema_parameters():
-                    samples = self.sample()
-            else:
+            sampling_context = (
+                self.adapter.use_ema_parameters() 
+                if self.off_policy 
+                else nullcontext()
+            )
+            with sampling_context:
                 samples = self.sample()
             
             self.optimize(samples)
@@ -200,10 +202,8 @@ class AWMTrainer(GRPOTrainer):
             disable=not self.accelerator.is_local_main_process,
         ):
             batch = next(data_iter)
-
-            sampling_context = self.adapter.use_ema_parameters()if self.off_policy else nullcontext()
             
-            with torch.no_grad(), self.autocast(), sampling_context:
+            with torch.no_grad(), self.autocast():
                 sample_kwargs = {
                     **self.training_args,
                     'compute_log_prob': False,  # Skip log prob computation during sampling
