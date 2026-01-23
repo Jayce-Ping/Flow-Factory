@@ -41,7 +41,7 @@ train:
   awm_weighting: Uniform
   # Training Timestep distribution
   num_train_timesteps: 4 # Set null to all steps
-  time_type: discrete_wo_init # Options: uniform, logit_normal
+  time_type: discrete_wo_init # Options: uniform, logit_normal, discrete, discrete_with_init, discrete_wo_init
   time_shift: 3.0
   timestep_fraction: 0.9
   # Clipping
