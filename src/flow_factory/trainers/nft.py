@@ -14,8 +14,10 @@
 
 # src/flow_factory/trainers/nft.py
 """
-DiffusionNFT Trainer with off-policy and continuous timestep support.
-Reference: https://arxiv.org/abs/2509.16117
+DiffusionNFT Trainer.
+Reference: 
+[1] DiffusionNFT: Online Diffusion Reinforcement with Forward Process
+    - https://arxiv.org/abs/2509.16117
 """
 import os
 from typing import List, Dict, Any, Union, Optional

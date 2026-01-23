@@ -15,6 +15,9 @@
 # src/flow_factory/trainers/awm.py
 """
 Advantage Weighted Matching (AWM) Trainer.
+References:
+[1] Advantage Weighted Matching: Aligning RL with Pretraining in Diffusion Models
+    - https://arxiv.org/pdf/2509.25050
 """
 import os
 from typing import List, Dict, Optional, Any, Union, Literal

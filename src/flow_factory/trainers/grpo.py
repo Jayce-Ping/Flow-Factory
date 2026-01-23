@@ -47,6 +47,9 @@ class GRPOTrainer(BaseTrainer):
     """
     GRPO Trainer for Flow Matching models.
     Implements group-based advantage computation and PPO-style clipping.
+    References:
+    [1] Flow-GRPO: Training Flow Matching Models via Online RL
+        - https://arxiv.org/abs/2505.05470
     """
     
     def __init__(self, **kwargs):
@@ -315,12 +318,12 @@ class GRPOTrainer(BaseTrainer):
 
     # =========================== Advantage Computation ============================
     def compute_advantages(
-            self,
-            samples: List[BaseSample],
-            rewards: Dict[str, torch.Tensor],
-            store_to_samples: bool = True,
-            aggregation_func: Optional[Union[Literal['sum', 'gdpo'], Callable]] = None,
-        ) -> torch.Tensor:
+        self,
+        samples: List[BaseSample],
+        rewards: Dict[str, torch.Tensor],
+        store_to_samples: bool = True,
+        aggregation_func: Optional[Union[Literal['sum', 'gdpo'], Callable]] = None,
+    ) -> torch.Tensor:
         """
         Compute advantages for GRPO.
         Args:
@@ -348,11 +351,11 @@ class GRPOTrainer(BaseTrainer):
         
 
     def compute_advantage_weighted_sum(
-            self,
-            samples: List[BaseSample],
-            rewards: Dict[str, torch.Tensor],
-            store_to_samples: bool = True
-        ) -> torch.Tensor:
+        self,
+        samples: List[BaseSample],
+        rewards: Dict[str, torch.Tensor],
+        store_to_samples: bool = True
+    ) -> torch.Tensor:
         """
         Compute advantages for GRPO using weighted sum aggregation.
         Args:
@@ -442,16 +445,17 @@ class GRPOTrainer(BaseTrainer):
 
 
     def compute_advantages_gdpo(
-            self,
-            samples: List[BaseSample],
-            rewards: Dict[str, torch.Tensor],
-            store_to_samples: bool = True
-        ) -> torch.Tensor:
+        self,
+        samples: List[BaseSample],
+        rewards: Dict[str, torch.Tensor],
+        store_to_samples: bool = True
+    ) -> torch.Tensor:
         """
         Compute advantages using GDPO: normalize each reward group-wise first,
         then combine with weights and apply batch normalization.
         References:
-            [1] GDPO: https://arxiv.org/abs/2601.05242
+        [1] GDPO: Group reward-Decoupled Normalization Policy Optimization for Multi-reward RL Optimization
+            - https://arxiv.org/abs/2601.05242
         """
         # 1. Gather rewards across processes
         rewards = {key: torch.as_tensor(value).to(self.accelerator.device) for key, value in rewards.items()}
