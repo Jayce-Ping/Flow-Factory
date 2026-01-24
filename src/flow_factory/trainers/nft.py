@@ -228,7 +228,9 @@ class DiffusionNFTTrainer(GRPOTrainer):
         }
 
     def optimize(self, samples: List[BaseSample]) -> None:
-        """Main optimization loop with continuous timestep sampling."""
+        """
+        Main optimization loop for DiffusionNFT.
+        """
         self.adapter.train()
         # Compute rewards and advantages for samples
         rewards = self.reward_processor.compute_rewards(samples, store_to_samples=True, epoch=self.epoch)
@@ -239,22 +241,65 @@ class DiffusionNFTTrainer(GRPOTrainer):
             for i in range(0, len(samples), self.training_args.per_device_batch_size)
         ]
 
+        # ==================== Pre-compute: Timesteps, Noise, and Old V Predictions ====================
+        for batch in tqdm(
+            sample_batches,
+            total=len(sample_batches),
+            desc=f'Epoch {self.epoch} Pre-computing Old V Predictions',
+            position=0,
+            disable=not self.accelerator.is_local_main_process,
+        ):
+            batch_size = batch['all_latents'].shape[0]
+            clean_latents = batch['all_latents'][:, -1]
+            
+            # Sample timesteps: (T, B)
+            all_timesteps = self._sample_timesteps(batch_size)
+            batch['_all_timesteps'] = all_timesteps
+            
+            # Pre-generate random noise: List[Tensor], each (B, C, H, W)
+            all_random_noise = [
+                randn_tensor(
+                    clean_latents.shape,
+                    device=self.accelerator.device,
+                    dtype=clean_latents.dtype,
+                )
+                for _ in range(self.num_train_timesteps)
+            ]
+            batch['_all_random_noise'] = all_random_noise
+            
+            # Compute old v predictions
+            old_v_pred_list = []
+            for t_idx in range(self.num_train_timesteps):
+                t_flat = all_timesteps[t_idx]  # (B,)
+                t_broadcast = to_broadcast_tensor(t_flat, clean_latents)
+                noise = all_random_noise[t_idx]
+                noised_latents = (1 - t_broadcast) * clean_latents + t_broadcast * noise
+                
+                with torch.no_grad(), self.autocast(), self.sampling_context():
+                    old_output = self._compute_nft_output(batch, t_flat, noised_latents)
+                old_v_pred_list.append(old_output['noise_pred'].detach())
+            
+            batch['_old_v_pred_list'] = old_v_pred_list
+
+        # ==================== Training Loop ====================
         loss_info = defaultdict(list)
 
-        for batch_idx, batch in enumerate(tqdm(
+        for batch in tqdm(
             sample_batches,
             total=len(sample_batches),
             desc=f'Epoch {self.epoch} Training',
             position=0,
             disable=not self.accelerator.is_local_main_process,
-        )):
+        ):
             batch_size = batch['all_latents'].shape[0]
-            clean_latents = batch['all_latents'][:, -1]  # x0
+            clean_latents = batch['all_latents'][:, -1]
+            
+            # Retrieve pre-computed data
+            all_timesteps = batch['_all_timesteps']
+            all_random_noise = batch['_all_random_noise']
+            old_v_pred_list = batch['_old_v_pred_list']
             
             with self.accelerator.accumulate(self.adapter.transformer):
-                # Sample timesteps: (T, B)
-                all_timesteps = self._sample_timesteps(batch_size)
-                
                 for t_idx in tqdm(
                     range(self.num_train_timesteps),
                     desc=f'Epoch {self.epoch} Timestep',
@@ -265,28 +310,26 @@ class DiffusionNFTTrainer(GRPOTrainer):
                     # 1. Prepare inputs
                     t_flat = all_timesteps[t_idx]  # (B,)
                     t_broadcast = to_broadcast_tensor(t_flat, clean_latents)
-                    noise = randn_tensor(clean_latents.shape, device=self.accelerator.device, dtype=clean_latents.dtype)
+                    noise = all_random_noise[t_idx]
                     noised_latents = (1 - t_broadcast) * clean_latents + t_broadcast * noise
+                    old_v_pred = old_v_pred_list[t_idx]
                     
-                    # 2. Forward pass
+                    # 2. Forward pass for current policy
                     output = self._compute_nft_output(batch, t_flat, noised_latents)
                     new_v_pred = output['noise_pred']
                     
-                    # Target velocity: v = noise - x0
-                    old_v_pred = noise - clean_latents
-                    
                     # 3. Compute NFT loss
-                    # Get advantages and clip,
                     adv = batch['advantage']
                     adv_clip_range = self.training_args.adv_clip_range
                     adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
+                    
                     # Normalize advantage to [0, 1]
                     normalized_adv = (adv / max(adv_clip_range)) / 2.0 + 0.5
                     r = torch.clamp(normalized_adv, 0, 1).view(-1, *([1] * (new_v_pred.dim() - 1)))
                     
                     # Positive/negative predictions
-                    positive_pred = self.nft_beta * new_v_pred + (1 - self.nft_beta) * old_v_pred.detach()
-                    negative_pred = (1.0 + self.nft_beta) * old_v_pred.detach() - self.nft_beta * new_v_pred
+                    positive_pred = self.nft_beta * new_v_pred + (1 - self.nft_beta) * old_v_pred
+                    negative_pred = (1.0 + self.nft_beta) * old_v_pred - self.nft_beta * new_v_pred
                     
                     # Positive loss
                     x0_pred = noised_latents - t_broadcast * positive_pred
@@ -318,9 +361,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
                             (new_v_pred - ref_output['noise_pred']) ** 2,
                             dim=tuple(range(1, new_v_pred.ndim))
                         )
-                        
-                        kl_div = kl_div.mean()
-                        kl_loss = self.training_args.kl_beta * kl_div
+                        kl_loss = self.training_args.kl_beta * kl_div.mean()
                         loss = loss + kl_loss
                         loss_info['kl_div'].append(kl_div.detach())
                         loss_info['kl_loss'].append(kl_loss.detach())
@@ -331,6 +372,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
                     
                     self.accelerator.backward(loss)
                 
+                # ==================== Optimizer Step ====================
                 if self.accelerator.sync_gradients:
                     self.accelerator.clip_grad_norm_(
                         self.adapter.get_trainable_parameters(),
