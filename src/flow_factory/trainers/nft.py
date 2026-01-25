@@ -205,7 +205,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
             noised_latents: Interpolated latents x_t = (1-t)*x_1 + t*noise.
         
         Returns:
-            Dict with noise_pred and std_dev_t.
+            Dict with noise_pred.
         """
         t_scaled = (timestep * 1000).view(-1)  # Scale to [0, 1000], ensure (B,)
         

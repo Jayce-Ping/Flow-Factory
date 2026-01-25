@@ -272,7 +272,6 @@ class AWMTrainer(GRPOTrainer):
             Dictionary with:
                 - log_prob: (B,)
                 - noise_pred: same shape as latents
-                - std_dev_t: broadcastable shape (B, 1, ..., 1)
         """
         t_scaled = (timestep * 1000).view(-1)  # Scale to [0, 1000], ensure (B,)
         

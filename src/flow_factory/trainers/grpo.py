@@ -231,9 +231,9 @@ class GRPOTrainer(BaseTrainer):
                     with self.autocast():
                         if self.enable_kl_loss:
                             if self.training_args.kl_type == 'v-based':
-                                return_kwargs = ['log_prob', 'noise_pred', 'std_dev_t', 'dt']
+                                return_kwargs = ['log_prob', 'noise_pred', 'dt']
                             elif self.training_args.kl_type == 'x-based':
-                                return_kwargs = ['log_prob', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt']
+                                return_kwargs = ['log_prob', 'next_latents', 'next_latents_mean', 'dt']
                         else:
                             return_kwargs = ['log_prob', 'dt']
                         
@@ -267,7 +267,7 @@ class GRPOTrainer(BaseTrainer):
                                 kl_div = torch.mean(
                                     ((output.noise_pred - ref_output.noise_pred) ** 2),
                                     dim=tuple(range(1, output.noise_pred.ndim)), keepdim=True
-                                ) / (2 * output.std_dev_t ** 2 + 1e-7)
+                                )
                             elif self.training_args.kl_type == 'x-based':
                                 # KL in latent space
                                 ref_forward_inputs['return_kwargs'] = ['next_latents_mean']
@@ -275,7 +275,7 @@ class GRPOTrainer(BaseTrainer):
                                 kl_div = torch.mean(
                                     ((output.next_latents_mean - ref_output.next_latents_mean) ** 2),
                                     dim=tuple(range(1, output.next_latents_mean.ndim)), keepdim=True
-                                ) / (2 * output.std_dev_t ** 2 + 1e-7)
+                                )
                         
                         kl_div = torch.mean(kl_div)
                         kl_loss = self.training_args.kl_beta * kl_div
