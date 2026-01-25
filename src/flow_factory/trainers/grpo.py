@@ -54,11 +54,7 @@ class GRPOTrainer(BaseTrainer):
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-    @property
-    def num_train_timesteps(self) -> int:
-        """Number of training timesteps."""
-        return len(self.adapter.scheduler.train_timesteps)
+        self.num_train_timesteps = len(self.adapter.scheduler.train_timesteps)
 
     @property
     def enable_kl_loss(self) -> bool:
