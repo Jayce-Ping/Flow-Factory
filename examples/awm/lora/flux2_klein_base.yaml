@@ -53,7 +53,7 @@ train:
   # KL div
   kl_weight: 'Uniform'
   kl_type: 'v-based'
-  kl_beta: 0.003 # KL divergence beta
+  kl_beta: 0.0001 # KL divergence beta
   ref_param_device: 'cuda' # Options: cpu, cuda
   # EMA
   ema_kl_beta: 1 # Used for KL-loss between current policy and EMA policy
