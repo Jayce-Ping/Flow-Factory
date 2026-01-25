@@ -169,14 +169,13 @@ class DiffusionNFTTrainer(GRPOTrainer):
         samples = []
         data_iter = iter(self.dataloader)
         
-        for batch_index in tqdm(
-            range(self.training_args.num_batches_per_epoch),
-            desc=f'Epoch {self.epoch} Sampling',
-            disable=not self.accelerator.is_local_main_process,
-        ):
-            batch = next(data_iter)
-            
-            with torch.no_grad(), self.autocast():
+        with torch.no_grad(), self.autocast():
+            for batch_index in tqdm(
+                range(self.training_args.num_batches_per_epoch),
+                desc=f'Epoch {self.epoch} Sampling',
+                disable=not self.accelerator.is_local_main_process,
+            ):
+                batch = next(data_iter)
                 sample_kwargs = {
                     **self.training_args,
                     'compute_log_prob': False,
@@ -184,8 +183,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
                 }
                 sample_kwargs = filter_kwargs(self.adapter.inference, **sample_kwargs)
                 sample_batch = self.adapter.inference(**sample_kwargs)
-            
-            samples.extend(sample_batch)
+                samples.extend(sample_batch)
 
         return samples
 
@@ -220,8 +218,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
         }
         forward_kwargs = filter_kwargs(self.adapter.forward, **forward_kwargs)
         
-        with self.autocast():
-            output = self.adapter.forward(**forward_kwargs)
+        output = self.adapter.forward(**forward_kwargs)
         
         return {
             'noise_pred': output.noise_pred,
@@ -283,105 +280,113 @@ class DiffusionNFTTrainer(GRPOTrainer):
         self.adapter.train()
         loss_info = defaultdict(list)
 
-        for batch in tqdm(
-            sample_batches,
-            total=len(sample_batches),
-            desc=f'Epoch {self.epoch} Training',
-            position=0,
-            disable=not self.accelerator.is_local_main_process,
-        ):
-            batch_size = batch['all_latents'].shape[0]
-            clean_latents = batch['all_latents'][:, -1]
-            
-            # Retrieve pre-computed data
-            all_timesteps = batch['_all_timesteps']
-            all_random_noise = batch['_all_random_noise']
-            old_v_pred_list = batch['_old_v_pred_list']
-            
-            with self.accelerator.accumulate(self.adapter.transformer):
-                for t_idx in tqdm(
-                    range(self.num_train_timesteps),
-                    desc=f'Epoch {self.epoch} Timestep',
-                    position=1,
-                    leave=False,
-                    disable=not self.accelerator.is_local_main_process,
-                ):
-                    # 1. Prepare inputs
-                    t_flat = all_timesteps[t_idx]  # (B,)
-                    t_broadcast = to_broadcast_tensor(t_flat, clean_latents)
-                    noise = all_random_noise[t_idx]
-                    noised_latents = (1 - t_broadcast) * clean_latents + t_broadcast * noise
-                    old_v_pred = old_v_pred_list[t_idx]
-                    
-                    # 2. Forward pass for current policy
-                    output = self._compute_nft_output(batch, t_flat, noised_latents)
-                    new_v_pred = output['noise_pred']
-                    
-                    # 3. Compute NFT loss
-                    adv = batch['advantage']
-                    adv_clip_range = self.training_args.adv_clip_range
-                    adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
-                    
-                    # Normalize advantage to [0, 1]
-                    normalized_adv = (adv / max(adv_clip_range)) / 2.0 + 0.5
-                    r = torch.clamp(normalized_adv, 0, 1).view(-1, *([1] * (new_v_pred.dim() - 1)))
-                    
-                    # Positive/negative predictions
-                    positive_pred = self.nft_beta * new_v_pred + (1 - self.nft_beta) * old_v_pred
-                    negative_pred = (1.0 + self.nft_beta) * old_v_pred - self.nft_beta * new_v_pred
-                    
-                    # Positive loss
-                    x0_pred = noised_latents - t_broadcast * positive_pred
-                    with torch.no_grad():
-                        weight = torch.abs(x0_pred.double() - clean_latents.double()).mean(
-                            dim=tuple(range(1, clean_latents.ndim)), keepdim=True
-                        ).clip(min=1e-5)
-                    positive_loss = ((x0_pred - clean_latents) ** 2 / weight).mean(dim=tuple(range(1, clean_latents.ndim)))
-                    
-                    # Negative loss
-                    neg_x0_pred = noised_latents - t_broadcast * negative_pred
-                    with torch.no_grad():
-                        neg_weight = torch.abs(neg_x0_pred.double() - clean_latents.double()).mean(
-                            dim=tuple(range(1, clean_latents.ndim)), keepdim=True
-                        ).clip(min=1e-5)
-                    negative_loss = ((neg_x0_pred - clean_latents) ** 2 / neg_weight).mean(dim=tuple(range(1, clean_latents.ndim)))
-                    
-                    # Combined loss
-                    ori_policy_loss = (r.squeeze() * positive_loss + (1.0 - r.squeeze()) * negative_loss) / self.nft_beta
-                    policy_loss = (ori_policy_loss * adv_clip_range[1]).mean()
-                    loss = policy_loss
-                    
-                    # 4. KL penalty
-                    if self.enable_kl_loss:
-                        with torch.no_grad(), self.adapter.use_ref_parameters():
-                            ref_output = self._compute_nft_output(batch, t_flat, noised_latents)
-                        # KL-loss in v-space
-                        kl_div = torch.mean(
-                            (new_v_pred - ref_output['noise_pred']) ** 2,
-                            dim=tuple(range(1, new_v_pred.ndim))
-                        )
-                        kl_loss = self.training_args.kl_beta * kl_div.mean()
-                        loss = loss + kl_loss
-                        loss_info['kl_div'].append(kl_div.detach())
-                        loss_info['kl_loss'].append(kl_loss.detach())
-                    
-                    loss_info['policy_loss'].append(policy_loss.detach())
-                    loss_info['unweighted_policy_loss'].append(ori_policy_loss.mean().detach())
-                    loss_info['loss'].append(loss.detach())
-                    
-                    self.accelerator.backward(loss)
+        with self.autocast():
+            for batch in tqdm(
+                sample_batches,
+                total=len(sample_batches),
+                desc=f'Epoch {self.epoch} Training',
+                position=0,
+                disable=not self.accelerator.is_local_main_process,
+            ):
+                batch_size = batch['all_latents'].shape[0]
+                clean_latents = batch['all_latents'][:, -1]
                 
-                # ==================== Optimizer Step ====================
-                if self.accelerator.sync_gradients:
-                    self.accelerator.clip_grad_norm_(
-                        self.adapter.get_trainable_parameters(),
-                        self.training_args.max_grad_norm,
+                # Retrieve pre-computed data
+                all_timesteps = batch['_all_timesteps']
+                all_random_noise = batch['_all_random_noise']
+                old_v_pred_list = batch['_old_v_pred_list']
+                # Average loss over timesteps
+                total_loss = []
+                
+                with self.accelerator.accumulate(self.adapter.transformer):
+                    for t_idx in tqdm(
+                        range(self.num_train_timesteps),
+                        desc=f'Epoch {self.epoch} Timestep',
+                        position=1,
+                        leave=False,
+                        disable=not self.accelerator.is_local_main_process,
+                    ):
+                        # 1. Prepare inputs
+                        t_flat = all_timesteps[t_idx]  # (B,)
+                        t_broadcast = to_broadcast_tensor(t_flat, clean_latents)
+                        noise = all_random_noise[t_idx]
+                        noised_latents = (1 - t_broadcast) * clean_latents + t_broadcast * noise
+                        old_v_pred = old_v_pred_list[t_idx]
+                        
+                        # 2. Forward pass for current policy
+                        output = self._compute_nft_output(batch, t_flat, noised_latents)
+                        new_v_pred = output['noise_pred']
+                        
+                        # 3. Compute NFT loss
+                        adv = batch['advantage']
+                        adv_clip_range = self.training_args.adv_clip_range
+                        adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
+                        
+                        # Normalize advantage to [0, 1]
+                        normalized_adv = (adv / max(adv_clip_range)) / 2.0 + 0.5
+                        r = torch.clamp(normalized_adv, 0, 1).view(-1, *([1] * (new_v_pred.dim() - 1)))
+                        
+                        # Positive/negative predictions
+                        positive_pred = self.nft_beta * new_v_pred + (1 - self.nft_beta) * old_v_pred
+                        negative_pred = (1.0 + self.nft_beta) * old_v_pred - self.nft_beta * new_v_pred
+                        
+                        # Positive loss
+                        x0_pred = noised_latents - t_broadcast * positive_pred
+                        with torch.no_grad():
+                            weight = torch.abs(x0_pred.double() - clean_latents.double()).mean(
+                                dim=tuple(range(1, clean_latents.ndim)), keepdim=True
+                            ).clip(min=1e-5)
+                        positive_loss = ((x0_pred - clean_latents) ** 2 / weight).mean(dim=tuple(range(1, clean_latents.ndim)))
+                        
+                        # Negative loss
+                        neg_x0_pred = noised_latents - t_broadcast * negative_pred
+                        with torch.no_grad():
+                            neg_weight = torch.abs(neg_x0_pred.double() - clean_latents.double()).mean(
+                                dim=tuple(range(1, clean_latents.ndim)), keepdim=True
+                            ).clip(min=1e-5)
+                        negative_loss = ((neg_x0_pred - clean_latents) ** 2 / neg_weight).mean(dim=tuple(range(1, clean_latents.ndim)))
+                        
+                        # Combined loss
+                        ori_policy_loss = (r.squeeze() * positive_loss + (1.0 - r.squeeze()) * negative_loss) / self.nft_beta
+                        policy_loss = (ori_policy_loss * adv_clip_range[1]).mean()
+                        loss = policy_loss
+                        
+                        # 4. KL penalty
+                        if self.enable_kl_loss:
+                            with torch.no_grad(), self.adapter.use_ref_parameters():
+                                ref_output = self._compute_nft_output(batch, t_flat, noised_latents)
+                            # KL-loss in v-space
+                            kl_div = torch.mean(
+                                (new_v_pred - ref_output['noise_pred']) ** 2,
+                                dim=tuple(range(1, new_v_pred.ndim))
+                            )
+                            kl_loss = self.training_args.kl_beta * kl_div.mean()
+                            loss = loss + kl_loss
+                            loss_info['kl_div'].append(kl_div.detach())
+                            loss_info['kl_loss'].append(kl_loss.detach())
+
+                        total_loss.append(loss) # Append per-timestep loss                        
+                        loss_info['policy_loss'].append(policy_loss.detach())
+                        loss_info['unweighted_policy_loss'].append(ori_policy_loss.mean().detach())
+                    
+                    # Backward per batch
+                    total_loss = torch.mean(
+                        torch.stack(total_loss) / self.num_train_timesteps
                     )
-                    loss_info = {k: torch.stack(v).mean() for k, v in loss_info.items()}
-                    loss_info = self.accelerator.reduce(loss_info, reduction="mean")
-                    self.log_data({f'train/{k}': v for k, v in loss_info.items()}, step=self.step)
-                    self.step += 1
-                    loss_info = defaultdict(list)
-                
-                self.optimizer.step()
-                self.optimizer.zero_grad()
+                    self.accelerator.backward(total_loss)
+                    loss_info['loss'].append(total_loss.detach())
+                    
+                    # ==================== Optimizer Step ====================
+                    if self.accelerator.sync_gradients:
+                        self.accelerator.clip_grad_norm_(
+                            self.adapter.get_trainable_parameters(),
+                            self.training_args.max_grad_norm,
+                        )
+                        loss_info = {k: torch.stack(v).mean() for k, v in loss_info.items()}
+                        loss_info = self.accelerator.reduce(loss_info, reduction="mean")
+                        self.log_data({f'train/{k}': v for k, v in loss_info.items()}, step=self.step)
+                        self.step += 1
+                        loss_info = defaultdict(list)
+                    
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
