@@ -194,6 +194,30 @@ class TrainingArguments(ArgABC):
         metadata={"help": "Beta parameter for NFT trainer."},
     )
 
+    # AWM arguments
+    ema_kl_beta: float = field(
+        default=0,
+        metadata={"help": "EMA KL penalty beta for AWM trainer."},
+    )
+
+    # AWM/NFT shared arguments - training steps, etc.
+    num_train_timesteps: int = field(
+        default=0,
+        metadata={"help": "Total number of training timesteps. Default to `num_inference_steps`."},
+    )
+    time_sampling_strategy: Literal['uniform', 'logit_normal', 'discrete', 'discrete_with_init', 'discrete_wo_init'] = field(
+        default='discrete',
+        metadata={"help": "Time sampling strategy for training."},
+    )
+    time_shift: float = field(
+        default=3.0,
+        metadata={"help": "Time shift for logit normal time sampling."},
+    )
+    timestep_fraction: float = field(
+        default=0.9,
+        metadata={"help": "Timestep fraction for time sampling - first `timestep_fraction` portion of timesteps are used."},
+    )
+
     # Sampling arguments
     num_inference_steps: int = field(
         default=10,
@@ -277,6 +301,10 @@ class TrainingArguments(ArgABC):
                     f"Both `resolution={self.resolution}` and `width={self.width}` are set. "
                     f"Using width to override: ({self.resolution[0]}, {self.width})."
                 )
+
+        # num_train_timesteps
+        if self.num_train_timesteps <= 0:
+            self.num_train_timesteps = self.num_inference_steps # Use same as inference steps
         
         # Final assignment
         self.height, self.width = self.resolution
@@ -295,15 +323,15 @@ class TrainingArguments(ArgABC):
         self.num_batches_per_epoch = (self.unique_sample_num_per_epoch * self.group_size) // sample_num_per_iteration
         self.gradient_accumulation_steps = max(1, self.num_batches_per_epoch // self.gradient_step_per_epoch)
 
-        self.adam_betas = tuple(self.adam_betas)
+        self.adam_betas : tuple[float, float] = tuple(self.adam_betas[:2]) # Ensure it's a tuple of two floats
         
         if not isinstance(self.clip_range, (tuple, list)):
-            self.clip_range = (-abs(self.clip_range), abs(self.clip_range))
+            self.clip_range : tuple[int, int] = (-abs(self.clip_range), abs(self.clip_range))
 
         assert self.clip_range[0] < self.clip_range[1], "`clip_range` lower bound must be less than upper bound."
 
         if not isinstance(self.adv_clip_range, (tuple, list)):
-            self.adv_clip_range = (-abs(self.adv_clip_range), abs(self.adv_clip_range))
+            self.adv_clip_range : tuple[int, int] = (-abs(self.adv_clip_range), abs(self.adv_clip_range))
 
         assert self.adv_clip_range[0] < self.adv_clip_range[1], "`adv_clip_range` lower bound must be less than upper bound."
 
