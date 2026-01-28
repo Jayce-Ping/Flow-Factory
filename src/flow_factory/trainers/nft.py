@@ -294,17 +294,15 @@ class DiffusionNFTTrainer(GRPOTrainer):
                 all_timesteps = batch['_all_timesteps']
                 all_random_noise = batch['_all_random_noise']
                 old_v_pred_list = batch['_old_v_pred_list']
-                # Initialize total loss
-                total_loss = torch.tensor(0.0, device=self.accelerator.device)
                 # Iterate through timesteps
-                with self.accelerator.accumulate(self.adapter.transformer):
-                    for t_idx in tqdm(
-                        range(self.num_train_timesteps),
-                        desc=f'Epoch {self.epoch} Timestep',
-                        position=1,
-                        leave=False,
-                        disable=not self.accelerator.is_local_main_process,
-                    ):
+                for t_idx in tqdm(
+                    range(self.num_train_timesteps),
+                    desc=f'Epoch {self.epoch} Timestep',
+                    position=1,
+                    leave=False,
+                    disable=not self.accelerator.is_local_main_process,
+                ):
+                    with self.accelerator.accumulate(*self.adapter.trainable_components):
                         # 1. Prepare inputs
                         t_flat = all_timesteps[t_idx]  # (B,)
                         t_broadcast = to_broadcast_tensor(t_flat, clean_latents)
@@ -364,17 +362,14 @@ class DiffusionNFTTrainer(GRPOTrainer):
                             loss_info['kl_div'].append(kl_div.detach())
                             loss_info['kl_loss'].append(kl_loss.detach())
 
-                        # 5. Accumulate per-timestep loss
-                        total_loss += loss / self.num_train_timesteps
+                        # 5. Backward pass
+                        self.accelerator.backward(loss)
 
                         # 6. Log per-timestep info
                         loss_info['policy_loss'].append(policy_loss.detach())
                         loss_info['unweighted_policy_loss'].append(ori_policy_loss.mean().detach())
-                    
-                    # Backward per batch
-                    self.accelerator.backward(total_loss)
-                    loss_info['loss'].append(total_loss.detach())
-                    
+                        loss_info['loss'].append(loss.detach())
+
                     # ==================== Optimizer Step ====================
                     if self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(

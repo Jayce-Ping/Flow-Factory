@@ -382,23 +382,20 @@ class AWMTrainer(GRPOTrainer):
                 all_timesteps = batch['_all_timesteps']  # (T, B)
                 all_random_noise = batch['_all_random_noise']
                 old_log_probs_list = batch['_old_log_probs']
-                # Initialize total loss
-                total_loss = torch.tensor(0.0, device=self.accelerator.device)                
-                with self.accelerator.accumulate(self.adapter.transformer):
-                    # Get advantages and clip
-                    adv = batch['advantage']
-                    adv_clip_range = self.training_args.adv_clip_range
-                    adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
-                    ratio_clip_range = self.training_args.clip_range
-                    total_loss = torch.tensor(0.0, device=self.accelerator.device)
-                    
-                    for t_idx in tqdm(
-                        range(self.num_train_timesteps),
-                        desc=f'Epoch {self.epoch} Timestep',
-                        position=1,
+                # Get advantages and clip
+                adv = batch['advantage']
+                adv_clip_range = self.training_args.adv_clip_range
+                adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
+                ratio_clip_range = self.training_args.clip_range
+                # Iterate over all timesteps for current batch
+                for t_idx in tqdm(
+                    range(self.num_train_timesteps),
+                    desc=f'Epoch {self.epoch} Timestep',
+                    position=1,
                         leave=False,
                         disable=not self.accelerator.is_local_main_process,
                     ):
+                    with self.accelerator.accumulate(*self.adapter.trainable_components):
                         # 1. Prepare inputs for current timestep
                         t_flat = all_timesteps[t_idx]  # (B,)
                         t_broadcast = to_broadcast_tensor(t_flat, clean_latents)  # (B, 1, ..., 1)
@@ -457,20 +454,17 @@ class AWMTrainer(GRPOTrainer):
                             loss_info['ema_kl_div'].append(ema_kl.detach())
                             loss_info['ema_kl_loss'].append(ema_kl_loss.detach())
 
-                        # 6. Accumulate per-timestep loss
-                        total_loss += loss / self.num_train_timesteps
+                        # 6. Backward pass
+                        self.accelerator.backward(loss)
 
                         # 7. Log per-timestep info
                         loss_info['ratio'].append(ratio.detach())
                         loss_info['unclipped_loss'].append(unclipped_loss.detach())
                         loss_info['clipped_loss'].append(clipped_loss.detach())
                         loss_info['policy_loss'].append(policy_loss.detach())
+                        loss_info['loss'].append(loss.detach())
                         loss_info['clip_frac_high'].append(torch.mean((ratio > 1.0 + ratio_clip_range[1]).float()))
                         loss_info['clip_frac_low'].append(torch.mean((ratio < 1.0 + ratio_clip_range[0]).float()))
-                        
-                    # Backward per batch
-                    self.accelerator.backward(total_loss)
-                    loss_info['loss'].append(total_loss.detach())
 
                     # ==================== Sync Gradients and Optimizer Step ====================
                     if self.accelerator.sync_gradients:

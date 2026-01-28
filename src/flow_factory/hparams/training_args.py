@@ -194,6 +194,30 @@ class TrainingArguments(ArgABC):
         metadata={"help": "Beta parameter for NFT trainer."},
     )
 
+    # AWM arguments
+    ema_kl_beta: float = field(
+        default=0,
+        metadata={"help": "EMA KL penalty beta for AWM trainer."},
+    )
+
+    # AWM/NFT shared arguments - training steps, etc.
+    num_train_timesteps: int = field(
+        default=0,
+        metadata={"help": "Total number of training timesteps. Default to `num_inference_steps`."},
+    )
+    time_sampling_strategy: Literal['uniform', 'logit_normal', 'discrete', 'discrete_with_init', 'discrete_wo_init'] = field(
+        default='discrete',
+        metadata={"help": "Time sampling strategy for training."},
+    )
+    time_shift: float = field(
+        default=3.0,
+        metadata={"help": "Time shift for logit normal time sampling."},
+    )
+    timestep_fraction: float = field(
+        default=0.9,
+        metadata={"help": "Timestep fraction for time sampling - first `timestep_fraction` portion of timesteps are used."},
+    )
+
     # Sampling arguments
     num_inference_steps: int = field(
         default=10,
@@ -277,6 +301,10 @@ class TrainingArguments(ArgABC):
                     f"Both `resolution={self.resolution}` and `width={self.width}` are set. "
                     f"Using width to override: ({self.resolution[0]}, {self.width})."
                 )
+
+        # num_train_timesteps
+        if self.num_train_timesteps <= 0:
+            self.num_train_timesteps = self.num_inference_steps # Use same as inference steps
         
         # Final assignment
         self.height, self.width = self.resolution

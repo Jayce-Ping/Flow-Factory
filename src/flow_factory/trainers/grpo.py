@@ -54,7 +54,7 @@ class GRPOTrainer(BaseTrainer):
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.num_train_timesteps = len(self.adapter.scheduler.train_timesteps)
+        self.num_train_timesteps = self.adapter.scheduler.num_sde_steps
 
     @property
     def enable_kl_loss(self) -> bool:
@@ -195,16 +195,15 @@ class GRPOTrainer(BaseTrainer):
                 position=0,
                 disable=not self.accelerator.is_local_main_process,
             )):
-                with self.accelerator.accumulate(self.adapter.transformer):
-                    total_loss = torch.tensor(0.0, device=self.accelerator.device)
-                    # Iterate through timesteps
-                    for idx, timestep_index in enumerate(tqdm(
-                        self.adapter.scheduler.train_timesteps,
-                        desc=f'Epoch {self.epoch} Timestep',
-                        position=1,
-                        leave=False,
-                        disable=not self.accelerator.is_local_main_process,
-                    )):
+                # Iterate through timesteps
+                for idx, timestep_index in enumerate(tqdm(
+                    self.adapter.scheduler.train_timesteps,
+                    desc=f'Epoch {self.epoch} Timestep',
+                    position=1,
+                    leave=False,
+                    disable=not self.accelerator.is_local_main_process,
+                )):
+                    with self.accelerator.accumulate(*self.adapter.trainable_components):
                         # 1. Prepare inputs
                         # Get old log prob
                         old_log_prob = batch['log_probs'][:, timestep_index]
@@ -286,20 +285,16 @@ class GRPOTrainer(BaseTrainer):
                             loss_info['kl_div'].append(kl_div.detach())
                             loss_info['kl_loss'].append(kl_loss.detach())
 
-                        # 5. Accumulate per-timestep loss
-                        total_loss += loss / self.num_train_timesteps
-
+                        # 5. Backward per timestep loss
+                        self.accelerator.backward(loss)
                         # 6. Log per-timestep info
                         loss_info['ratio'].append(ratio.detach())
                         loss_info['unclipped_loss'].append(unclipped_loss.detach())
                         loss_info['clipped_loss'].append(clipped_loss.detach())
                         loss_info['policy_loss'].append(policy_loss.detach())
+                        loss_info['loss'].append(loss.detach())
                         loss_info["clip_frac_high"].append(torch.mean((ratio > 1.0 + ratio_clip_range[1]).float()))
                         loss_info["clip_frac_low"].append(torch.mean((ratio < 1.0 + ratio_clip_range[0]).float()))
-
-                    # Backward per batch
-                    self.accelerator.backward(total_loss)
-                    loss_info['loss'].append(total_loss.detach())
 
                     if self.accelerator.sync_gradients:
                         self.accelerator.clip_grad_norm_(
@@ -567,14 +562,14 @@ class GRPOGuardTrainer(GRPOTrainer):
             position=0,
             disable=not self.accelerator.is_local_main_process,
         )):
-            with self.accelerator.accumulate(self.adapter.transformer):
-                for idx, timestep_index in enumerate(tqdm(
-                    self.adapter.scheduler.train_timesteps,
-                    desc=f'Epoch {self.epoch} Timestep',
-                    position=1,
-                    leave=False,
-                    disable=not self.accelerator.is_local_main_process,
-                )):
+            for idx, timestep_index in enumerate(tqdm(
+                self.adapter.scheduler.train_timesteps,
+                desc=f'Epoch {self.epoch} Timestep',
+                position=1,
+                leave=False,
+                disable=not self.accelerator.is_local_main_process,
+            )):
+                with self.accelerator.accumulate(*self.adapter.trainable_components):
                     # Get old log probs
                     old_log_prob = torch.stack(
                         [sample.log_probs[timestep_index] for sample in batch],
@@ -653,6 +648,7 @@ class GRPOGuardTrainer(GRPOTrainer):
                     loss_info['unclipped_loss'].append(unclipped_loss.detach())
                     loss_info['clipped_loss'].append(clipped_loss.detach())
                     loss_info['policy_loss'].append(policy_loss.detach())
+                    loss_info['loss'].append(loss.detach())
                     loss_info["clip_frac_high"].append(torch.mean((ratio > 1.0 + ratio_clip_range[1]).float()))
                     loss_info["clip_frac_low"].append(torch.mean((ratio < 1.0 + ratio_clip_range[0]).float()))
 
