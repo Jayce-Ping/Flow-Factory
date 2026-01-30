@@ -17,6 +17,7 @@ import os
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple, List, Union
 from functools import partial
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -74,11 +75,32 @@ class BaseTrainer(ABC):
         if self.accelerator.is_local_main_process:
             self.adapter.log_trainable_parameters()
 
+    @property
+    def show_progress_bar(self) -> bool:
+        """Whether to show tqdm progress bars."""
+        return self.log_args.verbose and self.accelerator.is_local_main_process
 
     def log_data(self, data: Dict[str, Any], step: int):
         """Log data using the initialized logger."""
         if self.logger is not None:
             self.logger.log_data(data, step=step)
+        
+        # Print summary when verbose=False
+        if not self.log_args.verbose and self.accelerator.is_local_main_process:
+            # Filter numeric values for console output
+            metrics = {}
+            for k, v in data.items():
+                if isinstance(v, (int, float)):
+                    metrics[k] = v
+                elif isinstance(v, torch.Tensor):
+                    metrics[k] = v.detach().float().mean().item()
+                elif isinstance(v, np.ndarray):
+                    metrics[k] = float(np.mean(v))
+            
+            if metrics:
+                parts = [f"[Step {step:04d} | Epoch {self.epoch:03d}]"]
+                parts.extend(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in metrics.items())
+                logger.info(" ".join(parts))
     
     def _init_logging_backend(self):
         if not self.accelerator.is_main_process:
@@ -108,12 +130,14 @@ class BaseTrainer(ABC):
         self.reward_processor = RewardProcessor(
             accelerator=self.accelerator,
             reward_models=self.reward_models,
-            tokenizer=self.adapter.tokenizer, # For prompt encoding/decoding
+            tokenizer=self.adapter.tokenizer, # For prompt encoding/decoding,
+            verbose=self.log_args.verbose,
         )
         self.eval_reward_processor = RewardProcessor(
             accelerator=self.accelerator,
             reward_models=self.eval_reward_models,
             tokenizer=self.adapter.tokenizer, # For prompt encoding/decoding
+            verbose=self.log_args.verbose,
         )
             
         return self.reward_models, self.eval_reward_models
