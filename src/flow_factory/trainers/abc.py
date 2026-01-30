@@ -32,7 +32,7 @@ from ..hparams import *
 from ..models.abc import BaseAdapter
 from ..data_utils.loader import get_dataloader
 from ..rewards import load_reward_model, BaseRewardModel, MultiRewardLoader, RewardProcessor
-from ..logger import load_logger
+from ..logger import load_logger, LogFormatter
 from ..utils.logger_utils import setup_logger
 
 logger = setup_logger(__name__)
@@ -87,19 +87,19 @@ class BaseTrainer(ABC):
         
         # Print summary when verbose=False
         if not self.log_args.verbose and self.accelerator.is_local_main_process:
-            # Filter numeric values for console output
             metrics = {}
             for k, v in data.items():
-                if isinstance(v, (int, float)):
-                    metrics[k] = v
-                elif isinstance(v, torch.Tensor):
-                    metrics[k] = v.detach().float().mean().item()
-                elif isinstance(v, np.ndarray):
-                    metrics[k] = float(np.mean(v))
+                scalar = LogFormatter.to_scalar(v)
+                if scalar is not None:
+                    metrics[k] = scalar
             
             if metrics:
                 parts = [f"[Step {step:04d} | Epoch {self.epoch:03d}]"]
-                parts.extend(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in metrics.items())
+                parts.extend(
+                    f"{k}={int(v)}" if isinstance(v, int) or (isinstance(v, float) and v.is_integer())
+                    else f"{k}={v:.4f}"
+                    for k, v in metrics.items()
+                )
                 logger.info(" ".join(parts))
     
     def _init_logging_backend(self):
