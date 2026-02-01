@@ -405,7 +405,7 @@ class ZImageOmniAdapter(BaseAdapter):
     
     # ======================== Inference ========================
     @torch.no_grad()
-    def _inference(
+    def inference(
         self,
         # Generation parameters
         num_inference_steps: int = 50,
