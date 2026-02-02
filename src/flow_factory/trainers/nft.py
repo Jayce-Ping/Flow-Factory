@@ -301,7 +301,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
                     desc=f'Epoch {self.epoch} Timestep',
                     position=1,
                     leave=False,
-                    disable=not self.accelerator.is_local_main_process,
+                    disable=not self.show_progress_bar,
                 ):
                     with self.accelerator.accumulate(*self.adapter.trainable_components):
                         # 1. Prepare inputs

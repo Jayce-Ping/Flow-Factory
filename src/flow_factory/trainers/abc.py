@@ -85,14 +85,9 @@ class BaseTrainer(ABC):
         if self.logger is not None:
             self.logger.log_data(data, step=step)
         
-        # Print summary when verbose=False
-        if not self.log_args.verbose and self.accelerator.is_local_main_process:
-            metrics = {}
-            for k, v in data.items():
-                scalar = LogFormatter.to_scalar(v)
-                if scalar is not None:
-                    metrics[k] = scalar
-            
+        # Print summary to console
+        if self.accelerator.is_local_main_process:
+            metrics = {k: v for k, v in ((k, LogFormatter.to_scalar(v)) for k, v in data.items()) if v is not None}
             if metrics:
                 parts = [f"[Step {step:04d} | Epoch {self.epoch:03d}]"]
                 parts.extend(
