@@ -85,6 +85,16 @@ class ModelArguments(ArgABC):
         metadata={"help": "Whether to resume training state, only effective when resume_path is a directory with full checkpoint."}
     )
 
+    attn_backend: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Attention backend for transformers. "
+                    "Options: 'native', 'flash', 'flash_hub', '_flash_3', '_flash_3_hub', 'sage', 'xformers'. "
+                    "None means use diffusers default."
+                    "See https://huggingface.co/docs/diffusers/main/en/optimization/attention_backends for all details."
+        },
+    )
+
     def __post_init__(self):        
         if isinstance(self.master_weight_dtype, str):
             self.master_weight_dtype = dtype_map[self.master_weight_dtype]
