@@ -120,19 +120,22 @@ class BaseAdapter(ABC):
         # Cache target module mapping
         self.target_module_map = self._init_target_module_map()
 
-        # Freeze non-trainable components
-        self._freeze_components()
-
-        # Load checkpoint or apply LoRA
+        # Load checkpoint
         if self.model_args.resume_path:
             self.load_checkpoint(
                 self.model_args.resume_path,
                 resume_type=self.model_args.resume_type
             )
-        elif self.model_args.finetune_type == 'lora':
+
+        # Freeze non-trainable components
+        self._freeze_components()
+
+        # Apply LoRA if needed
+        if self.model_args.finetune_type == 'lora':
             self.apply_lora(
                 target_modules=self.model_args.target_modules,
                 components=self.model_args.target_components,
+                overwrite=False, # Do not overwrite existing adapters
             )
 
         # Set precision
@@ -742,11 +745,12 @@ class BaseAdapter(ABC):
         if backend is None:
             return
         
-        for transformer in self.transformers:
+        for transformer_name in self.transformer_names:
+            transformer = self.get_component(transformer_name)
             if hasattr(transformer, 'set_attention_backend'):
                 transformer.set_attention_backend(backend)
                 if self.accelerator.is_main_process:
-                    logger.info(f"Set attention backend '{backend}' for {type(transformer).__name__}")
+                    logger.info(f"Set attention backend '{backend}' for {transformer_name}")
 
     # ============================== Precision Management ==============================
     def _mix_precision(self):
@@ -786,6 +790,7 @@ class BaseAdapter(ABC):
         self,
         target_modules: Union[str, List[str]],
         components: Union[str, List[str]] = 'transformer',
+        overwrite: bool = False,
     ) -> Union[PeftModel, Dict[str, PeftModel]]:
         """
         Apply LoRA adapters to specified components with prefix-based module targeting.
@@ -797,6 +802,9 @@ class BaseAdapter(ABC):
                 - 'transformer_2.to_v': Apply only to transformer_2
                 - ['to_q', 'transformer.to_k']: Mixed specification
             components: Component(s) to apply LoRA
+            overwrite: When applying LoRA to a component that already has LoRA adapters:
+                If True, delete existing 'default' adapter and create new one.
+                If False, skip components that already have LoRA adapters.
         """
         # Normalize components to list
         if isinstance(components, str):
@@ -817,18 +825,44 @@ class BaseAdapter(ABC):
             elif not modules:
                 logger.warning(f"No target modules for {comp}, skipping LoRA")
                 continue
-            
+
             lora_config = LoraConfig(
                 r=self.model_args.lora_rank,
                 lora_alpha=self.model_args.lora_alpha,
                 init_lora_weights="gaussian",
                 target_modules=modules,
             )
-            
+
             model_component = getattr(self, comp)
-            model_component = get_peft_model(model_component, lora_config)
+
+            if isinstance(model_component, PeftModel):
+                # Already a PeftModel, check for existing adapter
+                has_default = "default" in model_component.peft_config
+                if has_default and not overwrite:
+                    logger.info(f"Component {comp} already has 'default' adapter. Skipping.")
+                    continue
+
+                if has_default and overwrite:
+                    # Overwrite: delete existing adapter and reinitialize
+                    logger.info(f"Overwriting existing 'default' adapter for {comp}")
+                    model_component.delete_adapter("default")
+
+                # Add `default` adapter to existing PeftModel
+                model_component.add_adapter("default", lora_config)
+            else:
+                # Not a PeftModel, initialize directly
+                lora_config = LoraConfig(
+                    r=self.model_args.lora_rank,
+                    lora_alpha=self.model_args.lora_alpha,
+                    init_lora_weights="gaussian",
+                    target_modules=modules,
+                )
+                model_component = get_peft_model(model_component, lora_config)
+                # Set back to attribute
+                setattr(self, comp, model_component)
+         
+            # Activate the adapter
             model_component.set_adapter("default")
-            setattr(self, comp, model_component)
             results[comp] = model_component
             
             logger.info(f"Applied LoRA to {comp} with modules: {modules}")
@@ -1562,7 +1596,6 @@ class BaseAdapter(ABC):
         else:
             raise ValueError(f"Invalid resume_type: {resume_type}. Available: ['lora', 'full', 'state'].")
         
-        self.on_load()
         self.accelerator.wait_for_everyone()
         
         if self.accelerator.is_main_process:
