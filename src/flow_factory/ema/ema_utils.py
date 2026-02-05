@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# src/flow_factory/ema/ema_utils.py
 """
 Functional EMA Decay Utilities for Flow-Factory.
 
