@@ -14,7 +14,15 @@
 </p>
 
 # 🔥 News
-We have added the latest FLUX2-Klein series! Follow the commands to start:
+
+* **[2026-02-01]** Support for multiple **Attention Backends**! You can now optimize memory and speed by setting the `attn_backend` parameter in your config:
+```yaml
+  model:
+      attn_backend: "flash" # Options: "native", "xformers", "flash", "_flash_3_hub",
+```
+This experimental feature leverages `diffusers`'s `transformer.set_attention_backend`. Check the [official diffusers documentation](https://huggingface.co/docs/diffusers/main/en/optimization/attention_backends#available-backends) for all available options.
+
+* **[2026-01-17]** We have added the latest FLUX2-Klein series! Follow the commands to start:
 ```bash
 # Clone the repo with submodule `diffusers`
 git clone --recursive https://github.com/X-GenGroup/Flow-Factory.git
