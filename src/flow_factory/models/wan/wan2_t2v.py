@@ -29,7 +29,7 @@ from diffusers.pipelines.wan.pipeline_wan import WanPipeline, prompt_clean
 from peft import PeftModel
 
 from ..abc import BaseAdapter
-from ..samples import T2VSample
+from ...samples import T2VSample
 from ...hparams import *
 from ...scheduler import UniPCMultistepSDESchedulerOutput, UniPCMultistepSDEScheduler
 from ...utils.trajectory_collector import (

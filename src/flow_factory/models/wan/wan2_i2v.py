@@ -29,7 +29,7 @@ from diffusers.utils.torch_utils import randn_tensor
 from peft import PeftModel
 
 from ..abc import BaseAdapter
-from ..samples import I2VSample
+from ...samples import I2VSample
 from ...hparams import *
 from ...scheduler import UniPCMultistepSDESchedulerOutput, UniPCMultistepSDEScheduler
 from ...utils.base import filter_kwargs

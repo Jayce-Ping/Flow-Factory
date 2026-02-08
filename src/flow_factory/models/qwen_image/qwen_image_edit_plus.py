@@ -31,7 +31,7 @@ from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import QwenImage
 from diffusers.utils.torch_utils import randn_tensor
 
 from ..abc import BaseAdapter
-from ..samples import I2ISample
+from ...samples import I2ISample
 from ...hparams import *
 from ...scheduler import (
     FlowMatchEulerDiscreteSDEScheduler,

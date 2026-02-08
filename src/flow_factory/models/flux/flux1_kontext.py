@@ -29,7 +29,7 @@ from diffusers.pipelines.flux.pipeline_flux_kontext import FluxKontextPipeline
 from diffusers.utils.torch_utils import randn_tensor
 
 from ..abc import BaseAdapter
-from ..samples import I2ISample
+from ...samples import I2ISample
 from ...hparams import *
 from ...scheduler import (
     FlowMatchEulerDiscreteSDEScheduler,

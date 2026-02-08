@@ -27,7 +27,7 @@ from accelerate import Accelerator
 import torch
 from diffusers.pipelines.flux.pipeline_flux import FluxPipeline
 
-from ..samples import T2ISample
+from ...samples import T2ISample
 from ..abc import BaseAdapter
 from ...hparams import *
 from ...scheduler import (

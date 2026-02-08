@@ -31,7 +31,7 @@ tqdm = partial(tqdm_.tqdm, dynamic_ncols=True)
 
 from .abc import BaseTrainer
 from ..rewards import BaseRewardModel
-from ..models.abc import BaseSample
+from ..samples import BaseSample
 from ..utils.base import filter_kwargs, create_generator
 from ..utils.logger_utils import setup_logger
 from ..rewards import (

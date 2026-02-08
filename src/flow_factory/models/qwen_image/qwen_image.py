@@ -28,7 +28,7 @@ from diffusers.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 from accelerate import Accelerator
 
 from ..abc import BaseAdapter
-from ..samples import T2ISample
+from ...samples import T2ISample
 from ...hparams import *
 from ...scheduler import (
     FlowMatchEulerDiscreteSDEScheduler,

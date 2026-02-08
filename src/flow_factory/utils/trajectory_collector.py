@@ -18,6 +18,9 @@ Trajectory Collector for Inference
 
 Generic utility for memory-efficient tensor recording during denoising.
 Supports collecting all, none, or specific timestep indices.
+
+Produces compact storage + lightweight index map to eliminate redundant
+data in multi-GPU gather operations.
 """
 from typing import Union, List, Optional, Literal, Set, TypeVar
 import torch
@@ -32,7 +35,8 @@ class TrajectoryCollector:
     Collects tensors at specified indices during denoising trajectory.
     
     Memory-efficient alternative to storing all intermediate values.
-    Useful for AWM/NFT algorithms that only need initial/final states.
+    Produces a compact tensor + index map for O(1) position lookup,
+    avoiding redundant storage and multi-GPU communication overhead.
     
     Args:
         indices: Controls which steps to record:
@@ -57,7 +61,8 @@ class TrajectoryCollector:
         >>> for i in range(20):
         ...     latents = denoise_step(latents)
         ...     collector.collect(latents, step_idx=i + 1)
-        >>> trajectory = collector.get_result()  # [initial, final]
+        >>> trajectory = collector.get_result()       # [initial, final]
+        >>> index_map = collector.get_index_map()     # [0, -1, ..., -1, 1]
     """
     
     def __init__(
@@ -148,6 +153,40 @@ class TrajectoryCollector:
         """Get list of indices at which values were collected."""
         return self._collected_indices
     
+    def get_index_map(self) -> Optional[torch.Tensor]:
+        """
+        Build dense index map: original_position → compact_index.
+        
+        Returns a 1D LongTensor of size (total_steps + 1), where entry ``i``
+        gives the index into the compact ``all_latents`` for original
+        trajectory position ``i``, or -1 if that position was not collected.
+        
+        When ``collect_all=True``, returns identity ``[0, 1, ..., T]``.
+        Cost is negligible (<1KB for typical step counts).
+        
+        Returns:
+            LongTensor of shape (total_steps + 1), or None if collection is disabled.
+        
+        Example:
+            >>> collector = TrajectoryCollector([2, 3, 5, 6], total_steps=8)
+            >>> # After collection: collected_indices = [2, 3, 5, 6]
+            >>> collector.get_index_map()
+            tensor([-1, -1,  0,  1, -1,  2,  3, -1, -1])
+        """
+        if self.is_disabled:
+            return None
+        
+        total_positions = self.total_steps + 1
+        
+        if self.collect_all:
+            return torch.arange(total_positions, dtype=torch.long)
+        
+        index_map = torch.full((total_positions,), -1, dtype=torch.long)
+        for compact_idx, original_idx in enumerate(self._collected_indices):
+            index_map[original_idx] = compact_idx
+        
+        return index_map
+    
     def reset(self) -> None:
         """Clear collected values for reuse."""
         self._collected = []
@@ -156,6 +195,60 @@ class TrajectoryCollector:
     def __len__(self) -> int:
         """Number of collected values."""
         return len(self._collected)
+
+
+def compute_trajectory_indices(
+    train_timestep_indices: Union[List[int], torch.Tensor],
+    num_inference_steps: int,
+    include_initial: bool = True,
+) -> List[int]:
+    """
+    Compute the minimal set of trajectory positions needed for training.
+    
+    For each training timestep index ``i``, the trainer needs positions
+    ``i`` (current latents) and ``i + 1`` (next latents). This function
+    returns the deduplicated union of all required positions, sorted
+    ascending. Consecutive training steps naturally share boundaries,
+    further reducing the collected set.
+    
+    Args:
+        train_timestep_indices: Step indices used during training
+            (e.g., scheduler.train_timesteps). These are indices into the
+            trajectory (0-based), NOT timestep values.
+        num_inference_steps: Total denoising steps T.
+            The trajectory has T+1 positions (initial + T step outputs).
+        include_initial: If True, always include position 0 (initial noise).
+            Useful for algorithms that need the starting state.
+    
+    Returns:
+        Sorted list of unique trajectory positions to collect.
+    
+    Examples:
+        >>> compute_trajectory_indices([2, 5, 8], num_inference_steps=20)
+        [0, 2, 3, 5, 6, 8, 9]   # 7 positions instead of 21 (3× saving)
+        
+        >>> compute_trajectory_indices([0, 1, 2], num_inference_steps=20)
+        [0, 1, 2, 3]            # Consecutive steps share boundaries
+        
+        >>> compute_trajectory_indices(range(20), num_inference_steps=20)
+        [0, 1, 2, ..., 20]      # Full trajectory (no saving, same as 'all')
+    """
+    if isinstance(train_timestep_indices, torch.Tensor):
+        train_timestep_indices = train_timestep_indices.tolist()
+    
+    total_positions = num_inference_steps + 1
+    positions = set()
+    
+    if include_initial:
+        positions.add(0)
+    
+    for idx in train_timestep_indices:
+        if 0 <= idx < total_positions:
+            positions.add(idx)
+        if 0 <= idx + 1 < total_positions:
+            positions.add(idx + 1)
+    
+    return sorted(positions)
 
 
 def create_trajectory_collector(

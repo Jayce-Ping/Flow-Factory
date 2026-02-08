@@ -28,7 +28,7 @@ from diffusers.pipelines.flux2.system_messages import SYSTEM_MESSAGE, SYSTEM_MES
 import logging
 
 from ..abc import BaseAdapter
-from ..samples import I2ISample
+from ...samples import I2ISample
 from ...hparams import *
 from ...scheduler import (
     FlowMatchEulerDiscreteSDEScheduler,

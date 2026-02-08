@@ -28,7 +28,8 @@ import logging
 from accelerate import Accelerator
 
 from ...hparams import *
-from ..abc import BaseAdapter, BaseSample
+from ..abc import BaseAdapter
+from ...samples import BaseSample
 from ...scheduler import (
     FlowMatchEulerDiscreteSDEScheduler,
     FlowMatchEulerDiscreteSDESchedulerOutput,

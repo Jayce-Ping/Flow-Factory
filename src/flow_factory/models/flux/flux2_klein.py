@@ -28,7 +28,7 @@ from diffusers.pipelines.flux2.pipeline_flux2_klein import Flux2KleinPipeline, c
 import logging
 
 from ..abc import BaseAdapter
-from ..samples import I2ISample
+from ...samples import I2ISample
 from ...hparams import *
 from ...scheduler import (
     FlowMatchEulerDiscreteSDEScheduler,

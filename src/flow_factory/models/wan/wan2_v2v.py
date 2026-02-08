@@ -29,7 +29,7 @@ from accelerate import Accelerator
 from peft import PeftModel
 
 from ..abc import BaseAdapter
-from ..samples import V2VSample
+from ...samples import V2VSample
 from ...hparams import *
 from ...scheduler import UniPCMultistepSDESchedulerOutput, UniPCMultistepSDEScheduler
 from ...utils.base import filter_kwargs
