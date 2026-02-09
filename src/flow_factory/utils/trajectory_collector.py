@@ -86,13 +86,16 @@ class TrajectoryCollector:
             return None
         if self.indices == 'all':
             return None  # Signal to collect all
-        
+
+        # Total positions = total_steps + 1 (initial + each step result)
         total_positions = self.total_steps + 1
         normalized = set()
         
         for idx in self.indices:
+            # Handle negative indices
             if idx < 0:
                 idx = total_positions + idx
+            # Clamp to valid range
             if 0 <= idx < total_positions:
                 normalized.add(idx)
         
