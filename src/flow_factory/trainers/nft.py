@@ -32,7 +32,7 @@ tqdm = partial(tqdm_.tqdm, dynamic_ncols=True)
 
 from .abc import BaseTrainer
 from .grpo import GRPOTrainer
-from ..models.abc import BaseSample
+from ..samples import BaseSample
 from ..utils.base import filter_kwargs, create_generator, to_broadcast_tensor
 from ..utils.logger_utils import setup_logger
 from ..utils.noise_schedule import TimeSampler
@@ -173,7 +173,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
             for batch_index in tqdm(
                 range(self.training_args.num_batches_per_epoch),
                 desc=f'Epoch {self.epoch} Sampling',
-                disable=not self.accelerator.is_local_main_process,
+                disable=not self.show_progress_bar,
             ):
                 batch = next(data_iter)
                 sample_kwargs = {
@@ -215,6 +215,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
             'latents': noised_latents,
             'compute_log_prob': False,
             'return_kwargs': ['noise_pred'],
+            'noise_level': 0.0,
             **{k: v for k, v in batch.items() if k not in ['all_latents', 'timesteps', 'advantage']},
         }
         forward_kwargs = filter_kwargs(self.adapter.forward, **forward_kwargs)
@@ -246,7 +247,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
                 total=len(sample_batches),
                 desc=f'Epoch {self.epoch} Pre-computing Old V Predictions',
                 position=0,
-                disable=not self.accelerator.is_local_main_process,
+                disable=not self.show_progress_bar,
             ):
                 batch_size = batch['all_latents'].shape[0]
                 clean_latents = batch['all_latents'][:, -1]
@@ -287,7 +288,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
                 total=len(sample_batches),
                 desc=f'Epoch {self.epoch} Training',
                 position=0,
-                disable=not self.accelerator.is_local_main_process,
+                disable=not self.show_progress_bar,
             ):
                 # Retrieve pre-computed data
                 batch_size = batch['all_latents'].shape[0]
@@ -301,7 +302,7 @@ class DiffusionNFTTrainer(GRPOTrainer):
                     desc=f'Epoch {self.epoch} Timestep',
                     position=1,
                     leave=False,
-                    disable=not self.accelerator.is_local_main_process,
+                    disable=not self.show_progress_bar,
                 ):
                     with self.accelerator.accumulate(*self.adapter.trainable_components):
                         # 1. Prepare inputs
