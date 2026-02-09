@@ -282,6 +282,7 @@ class AWMTrainer(GRPOTrainer):
             'latents': noised_latents,
             'compute_log_prob': False,  # Compute log prob based on matching loss
             'return_kwargs': ['noise_pred'],
+            'noise_level': 0.0,
             **{k: v for k, v in batch.items() if k not in ['all_latents', 'timesteps', 'advantage']},
         }
         
