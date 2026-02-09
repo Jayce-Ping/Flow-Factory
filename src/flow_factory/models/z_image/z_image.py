@@ -36,9 +36,11 @@ from ...scheduler import (
     set_scheduler_timesteps
 )
 from ...utils.trajectory_collector import (
-    TrajectoryCollector, 
-    TrajectoryIndicesType, 
+    TrajectoryCollector,
+    CallbackCollector,
+    TrajectoryIndicesType,
     create_trajectory_collector,
+    create_callback_collector,
 )
 from ...utils.base import filter_kwargs
 from ...utils.logger_utils import setup_logger
@@ -266,7 +268,7 @@ class ZImageAdapter(BaseAdapter):
         latent_collector.collect(latents, step_idx=0)
         if compute_log_prob:
             log_prob_collector = create_trajectory_collector(trajectory_indices, num_inference_steps)
-        extra_call_back_res = defaultdict(list)
+        callback_collector = create_callback_collector(trajectory_indices, num_inference_steps)
         
         for i, t in enumerate(timesteps):
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
@@ -291,36 +293,31 @@ class ZImageAdapter(BaseAdapter):
             if compute_log_prob:
                 log_prob_collector.collect(output.log_prob, i)
 
-            if extra_call_back_kwargs:
-                capturable = {'noise_level': current_noise_level}
-                for key in extra_call_back_kwargs:
-                    if key in capturable and capturable[key] is not None:
-                        extra_call_back_res[key].append(capturable[key])
-                    elif hasattr(output, key):
-                        val = getattr(output, key)
-                        if val is not None:
-                            extra_call_back_res[key].append(val)
+            callback_collector.collect_step(
+                step_idx=i,
+                output=output,
+                keys=extra_call_back_kwargs,
+                capturable={'noise_level': current_noise_level},
+            )
 
         # Decode latents to images
         images = self.decode_latents(latents, output_type='pt')
 
         # Create samples
-
-        # Transpose `extra_call_back_res` lists to have batch dimension first
-        # (T, B, ...) -> (B, T, ...)
-        extra_call_back_res = {
-            k: torch.stack(v, dim=1)
-            if isinstance(v[0], torch.Tensor) else v
-            for k, v in extra_call_back_res.items()
-        }
-        all_latents = latent_collector.get_result()
+        extra_call_back_res = callback_collector.get_result()          # (B, len(trajectory_indices), ...)
+        callback_index_map = callback_collector.get_index_map()        # (T,) LongTensor
+        all_latents = latent_collector.get_result()                    # List[torch.Tensor(B, ...)]
+        latent_index_map = latent_collector.get_index_map()            # (T+1,) LongTensor
         all_log_probs = log_prob_collector.get_result() if compute_log_prob else None
+        log_prob_index_map = log_prob_collector.get_index_map() if compute_log_prob else None
         samples = [
             ZImageSample(
                 # Denoising trajectory
                 timesteps=timesteps,
                 all_latents=torch.stack([lat[b] for lat in all_latents], dim=0) if all_latents is not None else None,
                 log_probs=torch.stack([lp[b] for lp in all_log_probs], dim=0) if all_log_probs is not None else None,
+                latent_index_map=latent_index_map,
+                log_prob_index_map=log_prob_index_map,
                 # Generated image & metadata
                 height=height,
                 width=width,
@@ -335,7 +332,8 @@ class ZImageAdapter(BaseAdapter):
                 negative_prompt_embeds=negative_prompt_embeds[b] if negative_prompt_embeds is not None else None,
                 # Extra kwargs
                 extra_kwargs={
-                    **{k: v[b] for k, v in extra_call_back_res.items()}
+                    **{k: v[b] for k, v in extra_call_back_res.items()},
+                    'callback_index_map': callback_index_map,
                 },
             )
             for b in range(batch_size)
