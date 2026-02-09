@@ -601,7 +601,7 @@ class GRPOGuardTrainer(GRPOTrainer):
             )):
                 latents_index_map = batch['latent_index_map']  # (T+1,) LongTensor
                 log_probs_index_map = batch['log_prob_index_map']  # (T,) LongTensor
-                callback_index_map = batch[0]['callback_index_map']  # (T,) LongTensor, shared across batch.
+                callback_index_map = batch['callback_index_map'][0]  # (T,) LongTensor, shared across batch.
                 # Iterate through timesteps
                 for idx, timestep_index in enumerate(tqdm(
                     self.adapter.scheduler.train_timesteps,
@@ -638,15 +638,14 @@ class GRPOGuardTrainer(GRPOTrainer):
                         }
                         forward_inputs = filter_kwargs(self.adapter.forward, **forward_inputs)
                         # 2. Forward pass
+                        return_kwargs = set(['log_prob', 'next_latents_mean', 'std_dev_t', 'dt'])
                         if self.enable_kl_loss:
                             if self.training_args.kl_type == 'v-based':
-                                return_kwargs = ['log_prob', 'noise_pred', 'std_dev_t', 'dt']
+                                return_kwargs.add('noise_pred')
                             elif self.training_args.kl_type == 'x-based':
-                                return_kwargs = ['log_prob', 'next_latents', 'next_latents_mean', 'std_dev_t', 'dt']
-                        else:
-                            return_kwargs = ['log_prob', 'dt']
+                                return_kwargs.add('next_latents_mean')
                         
-                        forward_inputs['return_kwargs'] = return_kwargs
+                        forward_inputs['return_kwargs'] = list(return_kwargs)
                         output = self.adapter.forward(**forward_inputs)
 
                         # 3. Compute loss
@@ -656,10 +655,7 @@ class GRPOGuardTrainer(GRPOTrainer):
                         adv = torch.clamp(adv, adv_clip_range[0], adv_clip_range[1])
                         # Reweighted ratio
                         scale_factor = torch.sqrt(-output.dt) * output.std_dev_t
-                        old_next_latents_mean = torch.stack([
-                            sample.extra_kwargs['next_latents_mean'][callback_index_map[timestep_index]]
-                            for sample in batch
-                        ], dim=0)
+                        old_next_latents_mean = batch['next_latents_mean']
                         mse = (output.next_latents_mean - old_next_latents_mean).flatten(1).pow(2).mean(dim=1)
                         ratio = torch.exp((output.log_prob - old_log_prob) * scale_factor + mse / (2 * scale_factor))
                         # PPO-style clipped loss
