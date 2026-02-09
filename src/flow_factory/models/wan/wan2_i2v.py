@@ -573,6 +573,7 @@ class Wan2_I2V_Adapter(BaseAdapter):
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
             t_next = timesteps[i + 1] if i + 1 < len(timesteps) else torch.tensor(0, device=device)
             return_kwargs = list(set(['next_latents', 'log_prob', 'noise_pred'] + extra_call_back_kwargs))
+            current_compute_log_prob = compute_log_prob and current_noise_level > 0
 
             output = self.forward(
                 t=t,
@@ -585,14 +586,14 @@ class Wan2_I2V_Adapter(BaseAdapter):
                 condition=condition,
                 first_frame_mask=first_frame_mask,
                 attention_kwargs=attention_kwargs,
-                compute_log_prob=compute_log_prob and current_noise_level > 0,
+                compute_log_prob=current_compute_log_prob,
                 return_kwargs=return_kwargs,
                 noise_level=current_noise_level,
             )
 
             latents = output.next_latents
             latent_collector.collect(latents, i + 1)
-            if compute_log_prob:
+            if current_compute_log_prob:
                 log_prob_collector.collect(output.log_prob, i)
 
             callback_collector.collect_step(

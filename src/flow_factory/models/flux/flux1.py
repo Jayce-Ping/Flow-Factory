@@ -218,6 +218,7 @@ class Flux1Adapter(BaseAdapter):
             current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
             t_next = timesteps[i + 1] if i + 1 < len(timesteps) else torch.tensor(0, device=device)
             return_kwargs = list(set(['next_latents', 'log_prob', 'noise_pred'] + extra_call_back_kwargs))
+            current_compute_log_prob = compute_log_prob and current_noise_level > 0
 
             output = self.forward(
                 t=t,
@@ -226,7 +227,7 @@ class Flux1Adapter(BaseAdapter):
                 pooled_prompt_embeds=pooled_prompt_embeds,
                 img_ids=latent_image_ids,
                 guidance_scale=guidance_scale,
-                compute_log_prob=compute_log_prob and current_noise_level > 0,
+                compute_log_prob=current_compute_log_prob,
                 joint_attention_kwargs=joint_attention_kwargs,
                 return_kwargs=return_kwargs,
                 noise_level=current_noise_level,
@@ -234,7 +235,7 @@ class Flux1Adapter(BaseAdapter):
             
             latents = output.next_latents.to(dtype)
             latent_collector.collect(latents, i + 1)
-            if compute_log_prob:
+            if current_compute_log_prob:
                 log_prob_collector.collect(output.log_prob, i)
 
             callback_collector.collect_step(
