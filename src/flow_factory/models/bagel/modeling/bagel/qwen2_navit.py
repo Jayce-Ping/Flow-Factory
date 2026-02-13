@@ -244,10 +244,11 @@ class PackedAttention(Qwen2Attention):
             self.k_norm = nn.Identity()
 
     def forward(self, *args, **kwargs):
-        if self.training:
-            return self.forward_train(*args, **kwargs)
-        else:
-            return self.forward_inference(*args, **kwargs)
+        return self.forward_inference(*args, **kwargs)
+        # if self.training:
+        #     return self.forward_train(*args, **kwargs)
+        # else:
+        #     return self.forward_inference(*args, **kwargs)
 
     def forward_train(
         self,
@@ -398,10 +399,11 @@ class PackedAttentionMoT(Qwen2Attention):
         self.o_proj_moe_gen = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
     def forward(self, *args, **kwargs):
-        if self.training:
-            return self.forward_train(*args, **kwargs)
-        else:
-            return self.forward_inference(*args, **kwargs)
+        return self.forward_inference(*args, **kwargs)
+        # if self.training:
+        #     return self.forward_train(*args, **kwargs)
+        # else:
+        #     return self.forward_inference(*args, **kwargs)
 
     def forward_train(
         self,
@@ -590,8 +592,10 @@ class PackedAttentionMoT(Qwen2Attention):
         if mode == 'und':
             packed_attn_output = self.o_proj(packed_attn_output)
         elif mode == 'gen':
-            packed_attn_output[packed_text_indexes] = self.o_proj(packed_attn_output[packed_text_indexes])
-            packed_attn_output[packed_vae_token_indexes] = self.o_proj_moe_gen(packed_attn_output[packed_vae_token_indexes])
+            packed_query_sequence_ = torch.zeros_like(packed_attn_output)
+            packed_query_sequence_[packed_text_indexes] = self.o_proj(packed_attn_output[packed_text_indexes])
+            packed_query_sequence_[packed_vae_token_indexes] = self.o_proj_moe_gen(packed_attn_output[packed_vae_token_indexes])
+            packed_attn_output = packed_query_sequence_
 
         if update_past_key_values:
             past_key_values.key_cache[self.layer_idx] = merged_key_states
@@ -612,10 +616,11 @@ class Qwen2DecoderLayer(nn.Module):
         self.post_attention_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(self, *args, **kwargs):
-        if self.training:
-            return self.forward_train(*args, **kwargs)
-        else:
-            return self.forward_inference(*args, **kwargs)
+        return self.forward_inference(*args, **kwargs)
+        # if self.training:
+        #     return self.forward_train(*args, **kwargs)
+        # else:
+        #     return self.forward_inference(*args, **kwargs)
 
     def forward_train(
         self,
@@ -705,10 +710,11 @@ class Qwen2MoTDecoderLayer(nn.Module):
         self.post_attention_layernorm_moe_gen = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(self, *args, **kwargs):
-        if self.training:
-            return self.forward_train(*args, **kwargs)
-        else:
-            return self.forward_inference(*args, **kwargs)
+        return self.forward_inference(*args, **kwargs)
+        # if self.training:
+        #     return self.forward_train(*args, **kwargs)
+        # else:
+        #     return self.forward_inference(*args, **kwargs)
 
     def forward_train(
         self,
@@ -962,10 +968,11 @@ class Qwen2Model(Qwen2PreTrainedModel):
         self.post_init()
 
     def forward(self, *args, **kwargs):
-        if self.training:
-            return self.forward_train(*args, **kwargs)
-        else:
-            return self.forward_inference(*args, **kwargs)
+        return self.forward_inference(*args, **kwargs)
+        # if self.training:
+        #     return self.forward_train(*args, **kwargs)
+        # else:
+        #     return self.forward_inference(*args, **kwargs)
 
     def forward_train(
         self,
@@ -1129,6 +1136,7 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel):
         return self.model
 
     def forward(self, *args, **kwargs):
+        return self.forward_inference(*args, **kwargs)
         if self.training:
             return self.forward_train(*args, **kwargs)
         else:
