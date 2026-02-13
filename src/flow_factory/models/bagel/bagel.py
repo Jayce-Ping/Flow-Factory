@@ -22,11 +22,22 @@ Architecture Mapping:
 Supported Tasks:
     - Text-to-Image (T2I): prompt → image
     - Image(s)-to-Image (I2I): images + prompt → image
+
+Training-mode Caveats:
+    Bagel's Qwen2Model.forward() dispatches to ``forward_train()`` or
+    ``forward_inference()`` based on ``self.training``.  During RL training
+    we always need the inference-path signatures (packed_query_sequence,
+    KV-caches …), so we **temporarily switch the model to eval mode**
+    for every LLM forward call.  Gradients still flow because we do NOT
+    wrap with ``@torch.no_grad`` (autograd is orthogonal to train/eval
+    mode).  The only behavioural difference is that dropout is disabled,
+    which is desirable for generation modules anyway.
 """
 from __future__ import annotations
 
 import os
 import random
+from contextlib import contextmanager
 from copy import deepcopy
 from typing import Union, List, Dict, Any, Optional, Tuple, Literal, ClassVar
 from dataclasses import dataclass, field
@@ -180,7 +191,8 @@ class BagelAdapter(BaseAdapter):
 
         Bagel uses flow matching with a shifted timestep schedule:
             t_shifted = shift * t / (1 + (shift - 1) * t)
-        This is handled by the scheduler's sigma configuration.
+        The scheduler operates in [0, 1000] units; the adapter handles
+        conversion to/from Bagel's native [0, 1] sigma space.
         """
         scheduler_kwargs = {
             "num_train_timesteps": 1000,
@@ -190,11 +202,6 @@ class BagelAdapter(BaseAdapter):
             scheduler_kwargs.update(self.config.scheduler_args.to_dict())
 
         scheduler = FlowMatchEulerDiscreteSDEScheduler(**scheduler_kwargs)
-        # Apply SDE config from training args
-        if hasattr(self.training_args, "noise_level"):
-            scheduler.noise_level = self.training_args.noise_level
-        if hasattr(self.training_args, "dynamics_type"):
-            scheduler.dynamics_type = self.training_args.dynamics_type
 
         return scheduler
 
@@ -253,6 +260,29 @@ class BagelAdapter(BaseAdapter):
     def bagel_config(self):
         """The BagelConfig from the loaded model."""
         return self.pipeline._bagel_config
+
+    # ======================== Eval-mode context manager ========================
+
+    @contextmanager
+    def _eval_mode(self, module: nn.Module):
+        """
+        Temporarily switch a module to eval mode, restoring afterwards.
+
+        This is required because Bagel's Qwen2Model.forward() dispatches to
+        ``forward_train()`` vs ``forward_inference()`` based on ``self.training``.
+        We always need the inference dispatch (packed_query_sequence / KV-cache
+        API), even during RL training.
+
+        Note: eval mode only affects dropout / batchnorm; autograd is
+        **not** affected, so gradients still flow normally.
+        """
+        was_training = module.training
+        module.eval()
+        try:
+            yield
+        finally:
+            if was_training:
+                module.train()
 
     # ======================== Encoding ========================
 
@@ -371,16 +401,10 @@ class BagelAdapter(BaseAdapter):
           - cfg_text_context: context without text (for text-CFG)
           - cfg_img_context: context without images (for image-CFG)
 
-        Args:
-            prompt: Text prompt string.
-            condition_images: Optional list of condition images for I2I.
-            think: Whether to prepend the thinking system prompt.
-
-        Returns:
-            Tuple of (gen_context, cfg_text_context, cfg_img_context)
+        The model is temporarily switched to eval mode so that
+        ``Qwen2Model.forward()`` dispatches to ``forward_inference()``.
         """
         from .modeling.bagel.qwen2_navit import NaiveCache
-        from .data.data_utils import pil_img2rgb
 
         bagel = self._unwrap(self.bagel_model)
         num_layers = bagel.config.llm_config.num_hidden_layers
@@ -396,35 +420,49 @@ class BagelAdapter(BaseAdapter):
         cfg_text_context = _init_ctx()
         cfg_img_context = _init_ctx()
 
-        # --- Optional thinking prompt ---
-        if think:
-            system_prompt = (
-                "You should first think about the planning process in the mind "
-                "and then generate the image.\nThe planning process is enclosed "
-                "within <think> </think> tags."
-            )
-            gen_context = self._update_context_text(system_prompt, gen_context)
-            cfg_img_context = self._update_context_text(system_prompt, cfg_img_context)
+        # ── Must use eval mode for Qwen2 dispatch (forward_inference) ──
+        with self._eval_mode(bagel):
+            # --- Optional thinking prompt ---
+            if think:
+                system_prompt = (
+                    "You should first think about the planning process in the mind "
+                    "and then generate the image.\nThe planning process is enclosed "
+                    "within <think> </think> tags."
+                )
+                gen_context = self._update_context_text(system_prompt, gen_context)
+                cfg_img_context = self._update_context_text(system_prompt, cfg_img_context)
 
-        # --- Process interleaved inputs ---
-        # For I2I: images go first, then text
-        if condition_images:
-            for img in condition_images:
-                img_tensor = self.vae_transform.resize_transform(pil_img2rgb(img))
-                gen_context = self._update_context_image(img_tensor, gen_context)
-                cfg_text_context = deepcopy(gen_context)
+            # --- Process interleaved inputs ---
+            # For I2I: images go first, then text
+            if condition_images:
+                for img in condition_images:
+                    img_tensor = self.vae_transform.resize_transform(
+                        self._pil_img2rgb(img)
+                    )
+                    gen_context = self._update_context_image(img_tensor, gen_context)
+                    cfg_text_context = deepcopy(gen_context)
 
-        # Text always comes last (before generation)
-        cfg_text_context = deepcopy(gen_context)
-        gen_context = self._update_context_text(prompt, gen_context)
-        cfg_img_context = self._update_context_text(prompt, cfg_img_context)
+            # Text always comes last (before generation)
+            cfg_text_context = deepcopy(gen_context)
+            gen_context = self._update_context_text(prompt, gen_context)
+            cfg_img_context = self._update_context_text(prompt, cfg_img_context)
 
         return gen_context, cfg_text_context, cfg_img_context
+
+    @staticmethod
+    def _pil_img2rgb(img: Image.Image) -> Image.Image:
+        """Convert PIL image to RGB, importing lazily."""
+        from .data.data_utils import pil_img2rgb
+        return pil_img2rgb(img)
 
     # ─── _update_context_text ───
     @torch.no_grad()
     def _update_context_text(self, text: str, gen_context: Dict) -> Dict:
-        """Add text tokens to the KV-cache context."""
+        """Add text tokens to the KV-cache context.
+        
+        IMPORTANT: Caller must ensure the model is in eval mode
+        (via ``self._eval_mode``) for correct Qwen2 dispatch.
+        """
         bagel = self._unwrap(self.bagel_model)
         device = self.device
         kv_lens = gen_context["kv_lens"]
@@ -456,7 +494,11 @@ class BagelAdapter(BaseAdapter):
         vae: bool = True,
         vit: bool = True,
     ) -> Dict:
-        """Add image tokens (ViT + VAE) to the KV-cache context."""
+        """Add image tokens (ViT + VAE) to the KV-cache context.
+        
+        IMPORTANT: Caller must ensure the model is in eval mode
+        (via ``self._eval_mode``) for correct Qwen2 dispatch.
+        """
         bagel = self._unwrap(self.bagel_model)
         vae_model = self.get_component("vae")
         device = self.device
@@ -497,6 +539,140 @@ class BagelAdapter(BaseAdapter):
             )
 
         return {"kv_lens": kv_lens, "ropes": ropes, "past_key_values": past_key_values}
+
+    # ======================== Flow Forward (grad-safe) ========================
+
+    def _forward_flow(
+        self,
+        x_t: torch.Tensor,
+        timestep: torch.LongTensor,
+        packed_vae_token_indexes: torch.LongTensor,
+        packed_vae_position_ids: torch.LongTensor,
+        packed_text_ids: torch.LongTensor,
+        packed_text_indexes: torch.LongTensor,
+        packed_indexes: torch.LongTensor,
+        packed_position_ids: torch.LongTensor,
+        packed_seqlens: torch.IntTensor,
+        key_values_lens: torch.IntTensor,
+        past_key_values: NaiveCache,
+        packed_key_value_indexes: torch.LongTensor,
+        cfg_renorm_min: float = 0.0,
+        cfg_renorm_type: str = "global",
+        # cfg_text
+        cfg_text_scale: float = 1.0,
+        cfg_text_packed_position_ids: Optional[torch.LongTensor] = None,
+        cfg_text_packed_query_indexes: Optional[torch.LongTensor] = None,
+        cfg_text_key_values_lens: Optional[torch.Tensor] = None,
+        cfg_text_past_key_values: Optional[NaiveCache] = None,
+        cfg_text_packed_key_value_indexes: Optional[torch.LongTensor] = None,
+        # cfg_img
+        cfg_img_scale: float = 1.0,
+        cfg_img_packed_position_ids: Optional[torch.LongTensor] = None,
+        cfg_img_packed_query_indexes: Optional[torch.LongTensor] = None,
+        cfg_img_key_values_lens: Optional[torch.Tensor] = None,
+        cfg_img_past_key_values: Optional[NaiveCache] = None,
+        cfg_img_packed_key_value_indexes: Optional[torch.LongTensor] = None,
+        cfg_type: str = "parallel",
+    ):  
+        packed_text_embedding = self.bagel_model.language_model.forward(mode="get_embeddings", input_ids=packed_text_ids)
+        packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), self.bagel_model.hidden_size))
+        packed_sequence[packed_text_indexes] = packed_text_embedding
+
+        assert timestep.unique().shape[0] == 1
+        packed_pos_embed = self.bagel_model.latent_pos_embed(packed_vae_position_ids)
+        packed_timestep_embeds = self.bagel_model.time_embedder(timestep)
+        x_t = self.bagel_model.vae2llm(x_t) + packed_timestep_embeds + packed_pos_embed
+        if x_t.dtype != packed_sequence.dtype:
+            x_t = x_t.to(packed_sequence.dtype)
+        packed_sequence[packed_vae_token_indexes] = x_t
+
+        extra_inputs = {}
+        if self.bagel_model.use_moe:
+            extra_inputs = {
+                "mode": "gen",
+                "packed_vae_token_indexes": packed_vae_token_indexes,
+                "packed_text_indexes": packed_text_indexes
+            }
+        output = self.bagel_model.language_model.forward(
+            packed_query_sequence=packed_sequence, # packed_sequence.shape=[1026, 3584]
+            query_lens=packed_seqlens,   # packed_seqlens=tensor([1026])
+            packed_query_position_ids=packed_position_ids,  # packed_position_ids.shape=[1026]
+            packed_query_indexes=packed_indexes,    # packed_indexes.shape=[1026]
+            past_key_values=past_key_values,     
+            key_values_lens=key_values_lens,    # key_values_lens=tensor([9])
+            packed_key_value_indexes=packed_key_value_indexes,   # packed_key_value_indexes.shape=[9]
+            update_past_key_values=False,
+            is_causal=False,
+            **extra_inputs,
+        )
+        v_t = self.bagel_model.llm2vae(output.packed_query_sequence)
+        v_t = v_t[packed_vae_token_indexes]
+        if cfg_text_scale > 1.0:
+            cfg_text_output = self.bagel_model.language_model.forward(
+                packed_query_sequence=packed_sequence,
+                query_lens=packed_seqlens,
+                packed_query_position_ids=cfg_text_packed_position_ids,   # cfg_text_packed_position_ids.shape=[1026]
+                packed_query_indexes=cfg_text_packed_query_indexes,
+                past_key_values=cfg_text_past_key_values,
+                key_values_lens=cfg_text_key_values_lens,
+                packed_key_value_indexes=cfg_text_packed_key_value_indexes,
+                update_past_key_values=False,
+                is_causal=False,
+                **extra_inputs,
+            )
+            cfg_text_v_t = self.bagel_model.llm2vae(cfg_text_output.packed_query_sequence)
+            cfg_text_v_t = cfg_text_v_t[packed_vae_token_indexes]
+        if cfg_img_scale > 1.0:
+            cfg_img_output = self.bagel_model.language_model.forward(
+                packed_query_sequence=packed_sequence,
+                query_lens=packed_seqlens,
+                packed_query_position_ids=cfg_img_packed_position_ids,
+                packed_query_indexes=cfg_img_packed_query_indexes,
+                past_key_values=cfg_img_past_key_values,
+                key_values_lens=cfg_img_key_values_lens,
+                packed_key_value_indexes=cfg_img_packed_key_value_indexes,
+                update_past_key_values=False,
+                is_causal=False,
+                **extra_inputs,
+            )
+            cfg_img_v_t = self.bagel_model.llm2vae(cfg_img_output.packed_query_sequence)
+            cfg_img_v_t = cfg_img_v_t[packed_vae_token_indexes]
+
+        if cfg_text_scale > 1.0:
+            if cfg_renorm_type == "text_channel":
+                v_t_text_ = cfg_text_v_t + cfg_text_scale * (v_t - cfg_text_v_t)
+                norm_v_t = torch.norm(v_t, dim=-1, keepdim=True)
+                norm_v_t_text_ = torch.norm(v_t_text_, dim=-1, keepdim=True)
+                scale = (norm_v_t / (norm_v_t_text_ + 1e-8)).clamp(min=cfg_renorm_min, max=1.0)
+                v_t_text = v_t_text_ * scale
+                if cfg_img_scale > 1.0:
+                    v_t = cfg_img_v_t + cfg_img_scale * (v_t_text - cfg_img_v_t)
+                else:
+                    v_t = v_t_text
+            else:
+                v_t_text_ = cfg_text_v_t + cfg_text_scale * (v_t - cfg_text_v_t)
+                
+                if cfg_img_scale > 1.0:
+                    v_t_ = cfg_img_v_t + cfg_img_scale * (v_t_text_ - cfg_img_v_t)
+                else:
+                    v_t_ = v_t_text_
+
+                # NOTE norm is computed over all dimensions, thus currently only supports batch_size = 1 with navit
+                if cfg_renorm_type == "global":
+                    norm_v_t = torch.norm(v_t)
+                    norm_v_t_ = torch.norm(v_t_)
+                elif cfg_renorm_type == "channel":
+                    norm_v_t = torch.norm(v_t, dim=-1, keepdim=True)
+                    norm_v_t_ = torch.norm(v_t_, dim=-1, keepdim=True)
+                else:
+                    raise NotImplementedError(f"{cfg_renorm_type} is not suppoprted")
+                scale = (norm_v_t / (norm_v_t_ + 1e-8)).clamp(min=cfg_renorm_min, max=1.0)
+                v_t = v_t_ * scale
+        else:
+            # No CFG
+            pass
+
+        return v_t
 
     # ======================== Inference ========================
 
@@ -616,7 +792,7 @@ class BagelAdapter(BaseAdapter):
             all_log_probs = result["all_log_probs"]    # List[Tensor] or None
 
             sample = SampleCls(
-                # Trajectory
+                # Trajectory — timesteps stored in [0, 1000] for scheduler
                 timesteps=result["timesteps"],
                 all_latents=(
                     torch.stack(all_latents, dim=0)
@@ -689,25 +865,38 @@ class BagelAdapter(BaseAdapter):
         """
         Core denoising loop using Bagel's flow matching.
 
-        Mirrors the Flux1 adapter pattern: calls ``self.forward()`` at each
-        step, uses trajectory/callback collectors for selective recording.
+        **Timestep convention**: Bagel natively works with sigmas in [0, 1],
+        but the scheduler operates in [0, 1000].  This method:
+          1. Computes Bagel's shifted sigma schedule in [0, 1]
+          2. Passes sigmas to the scheduler (which stores them as
+             ``timesteps = sigmas * 1000``)
+          3. Uses ``scheduler.timesteps`` (in [0, 1000]) for the sample's
+             timestep storage and for ``scheduler.step()``
+          4. ``forward()`` converts back to [0, 1] for the Bagel LLM
 
         Returns:
-            Dict with keys: ``unpacked_latent``, ``all_latents``, ``all_log_probs``,
-            ``timesteps``, ``latent_index_map``, ``log_prob_index_map``,
-            ``callback_results``, ``callback_index_map``.
+            Dict with keys: ``unpacked_latent``, ``all_latents``,
+            ``all_log_probs``, ``timesteps``, ``latent_index_map``,
+            ``log_prob_index_map``, ``callback_results``, ``callback_index_map``.
         """
-        # ── 1. Build shifted timestep schedule ──
-        # Bagel uses: t_shifted = shift * t / (1 + (shift - 1) * t)
-        timestep_schedule = torch.linspace(1, 0, num_inference_steps + 1, device=device)
-        timestep_schedule = (
-            timestep_shift * timestep_schedule
-            / (1 + (timestep_shift - 1) * timestep_schedule)
+        # ── 1. Build Bagel's shifted sigma schedule & configure scheduler ──
+        #
+        # Bagel's schedule:  σ_shifted = shift * σ / (1 + (shift - 1) * σ)
+        # where σ goes linearly from 1 → 0.
+        #
+        # We pass these sigmas to the scheduler, which converts them to
+        # timesteps in [0, 1000] and sets up SDE noise level machinery.
+        linear_sigmas = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
+        shifted_sigmas = (
+            timestep_shift * linear_sigmas
+            / (1 + (timestep_shift - 1) * linear_sigmas)
         )
-        timesteps = timestep_schedule[:-1]   # (T,) step points
+        # Configure scheduler with Bagel's schedule
+        self.scheduler.set_timesteps(sigmas=shifted_sigmas.tolist(), device=device)
+        # Now: scheduler.timesteps ≈ shifted_sigmas * 1000, shape (T,)
+        #      scheduler.sigmas    = [shifted_sigmas..., 0.0], shape (T+1,)
 
-        # Also set scheduler timesteps so train_timesteps/noise_levels work
-        self.scheduler.set_timesteps(num_inference_steps, device=device)
+        timesteps = self.scheduler.timesteps  # (T,) in [0, 1000]
 
         # ── 2. Initial noise ──
         x_t = gen_input["packed_init_noises"].to(device)
@@ -726,14 +915,22 @@ class BagelAdapter(BaseAdapter):
             create_trajectory_collector(trajectory_indices, num_inference_steps)
             if compute_log_prob else None
         )
-        callback_collector = create_callback_collector(trajectory_indices, num_inference_steps)
+        callback_collector = create_callback_collector(
+            trajectory_indices, num_inference_steps
+        )
 
         # ── 4. Denoising loop ──
         for i, t in enumerate(timesteps):
-            t_next = timestep_schedule[i + 1]
-            current_noise_level = self.scheduler.get_noise_level_for_timestep(self.scheduler.timesteps[i])
+            t_next = (
+                timesteps[i + 1]
+                if i + 1 < len(timesteps)
+                else torch.tensor(0.0, device=device)
+            )
+            current_noise_level = self.scheduler.get_noise_level_for_timestep(t)
             current_compute_log_prob = compute_log_prob and current_noise_level > 0
-            return_kwargs = list(set(['next_latents', 'log_prob', 'noise_pred'] + extra_call_back_kwargs))
+            return_kwargs = list(set(
+                ['next_latents', 'log_prob', 'noise_pred'] + extra_call_back_kwargs
+            ))
 
             # Single forward step: flow prediction + scheduler step
             output = self.forward(
@@ -794,6 +991,7 @@ class BagelAdapter(BaseAdapter):
             "all_log_probs": (
                 log_prob_collector.get_result() if log_prob_collector else None
             ),
+            # Store timesteps in [0, 1000] — same convention as all other adapters
             "timesteps": timesteps,
             "latent_index_map": latent_collector.get_index_map(),
             "log_prob_index_map": (
@@ -857,6 +1055,10 @@ class BagelAdapter(BaseAdapter):
           - **Training**: ``past_key_values=None``, ``prompt`` provided.
             KV-cache contexts are rebuilt from scratch.
 
+        **Timestep convention**: ``t`` and ``t_next`` are in [0, 1000].
+        They are converted to [0, 1] sigmas for Bagel's flow forward,
+        then passed as-is to ``scheduler.step()`` which expects [0, 1000].
+
         Returns:
             ``SDESchedulerOutput`` with ``next_latents``, ``log_prob``,
             ``noise_pred``, etc. depending on ``return_kwargs``.
@@ -877,21 +1079,25 @@ class BagelAdapter(BaseAdapter):
             _image_shape = image_shape or (
                 kwargs.get("height", 1024), kwargs.get("width", 1024)
             )
-            gen_ctx, cfg_text_ctx, cfg_img_ctx = self._build_gen_context(
-                prompt=prompt[0],
-                condition_images=(
-                    condition_images[0] if condition_images else None
-                ),
-            )
 
-            # Prepare packed latent generation inputs
-            gen_input = bagel.prepare_vae_latent(
-                curr_kvlens=gen_ctx["kv_lens"],
-                curr_rope=gen_ctx["ropes"],
-                image_sizes=[_image_shape],
-                new_token_ids=self.new_token_ids,
-                device=device,
-            )
+            # Context building is always @torch.no_grad + eval mode
+            with torch.no_grad():
+                gen_ctx, cfg_text_ctx, cfg_img_ctx = self._build_gen_context(
+                    prompt=prompt[0],
+                    condition_images=(
+                        condition_images[0] if condition_images else None
+                    ),
+                )
+
+                # Prepare packed latent generation inputs
+                gen_input = bagel.prepare_vae_latent(
+                    curr_kvlens=gen_ctx["kv_lens"],
+                    curr_rope=gen_ctx["ropes"],
+                    image_sizes=[_image_shape],
+                    new_token_ids=self.new_token_ids,
+                    device=device,
+                )
+
             past_key_values = gen_ctx["past_key_values"]
             cfg_text_past_kv = cfg_text_ctx["past_key_values"]
             cfg_img_past_kv = cfg_img_ctx["past_key_values"]
@@ -907,41 +1113,48 @@ class BagelAdapter(BaseAdapter):
             packed_key_value_indexes = gen_input["packed_key_value_indexes"]
             key_values_lens = gen_input["key_values_lens"]
 
-            cfg_text_generation_input = bagel.prepare_vae_latent_cfg(
-                curr_kvlens=cfg_text_ctx["kv_lens"],
-                curr_rope=cfg_text_ctx["ropes"],
-                image_sizes=[_image_shape],
-                device=device,
-            )
-            cfg_img_generation_input = bagel.prepare_vae_latent_cfg(
-                curr_kvlens=cfg_img_ctx["kv_lens"],
-                curr_rope=cfg_img_ctx["ropes"],
-                image_sizes=[_image_shape],
-                device=device,
-            )
+            with torch.no_grad():
+                cfg_text_generation_input = bagel.prepare_vae_latent_cfg(
+                    curr_kvlens=cfg_text_ctx["kv_lens"],
+                    curr_rope=cfg_text_ctx["ropes"],
+                    image_sizes=[_image_shape],
+                    device=device,
+                )
+                cfg_img_generation_input = bagel.prepare_vae_latent_cfg(
+                    curr_kvlens=cfg_img_ctx["kv_lens"],
+                    curr_rope=cfg_img_ctx["ropes"],
+                    image_sizes=[_image_shape],
+                    device=device,
+                )
 
-        # ── 2. CFG gating ──
-        t_val = t.flatten()[0].item()
-        if t_val > cfg_interval[0] and t_val <= cfg_interval[1]:
+        # ── 2. Convert [0, 1000] → [0, 1] sigma for Bagel ──
+        # Bagel's flow forward expects timesteps as sigmas in [0, 1].
+        # The scheduler and GRPO trainer work in [0, 1000].
+        sigma = t.float() / 1000.0                                 # (B,) or (1,)
+        timestep_for_bagel = sigma.expand(latents.shape[0])         # (B,) in [0, 1]
+
+        # ── 3. CFG gating based on sigma (not timestep/1000) ──
+        sigma_val = sigma.flatten()[0].item()
+        if sigma_val > cfg_interval[0] and sigma_val <= cfg_interval[1]:
             cfg_text_s = cfg_text_scale
             cfg_img_s = cfg_img_scale
         else:
             cfg_text_s = 1.0
             cfg_img_s = 1.0
 
-        timestep_tensor = t.expand(latents.shape[0]) if t.dim() <= 1 else t
-
         # Helper: safely extract CFG tensor, fallback to empty tensor
-        def _cfg(d: Optional[Dict], key: str) -> torch.Tensor:
-            v = d.get(key) if d else None
+        def _cfg(d: Optional[Dict], key: str) -> Optional[torch.Tensor]:
+            if d is None:
+                return None
+            v = d.get(key)
             if isinstance(v, torch.Tensor):
                 return v.to(device)
-            return torch.tensor([], device=device)
+            return None
 
-        # ── 3. Flow prediction ──
-        v_t = bagel._forward_flow(
+        # ── 4. Flow velocity prediction (gradient-safe) ──
+        v_t = self._forward_flow(
             x_t=latents,
-            timestep=timestep_tensor,
+            timestep=timestep_for_bagel,
             packed_vae_token_indexes=packed_vae_token_indexes.to(device),
             packed_vae_position_ids=packed_vae_position_ids.to(device),
             packed_text_ids=packed_text_ids.to(device),
@@ -971,7 +1184,7 @@ class BagelAdapter(BaseAdapter):
             cfg_type="parallel",
         )
 
-        # ── 4. Scheduler step ──
+        # ── 5. Scheduler step (timesteps stay in [0, 1000]) ──
         output = self.scheduler.step(
             noise_pred=v_t,
             timestep=t,
