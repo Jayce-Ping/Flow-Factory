@@ -337,6 +337,10 @@ class BagelAdapter(BaseAdapter):
         ]
         return {"condition_images": processed}
 
+    def encode_video(self, videos: Any) -> None:
+        """Bagel does not support video input; raise NotImplementedError."""
+        return None
+
     # ======================== Decoding ========================
 
     def decode_latents(
