@@ -381,7 +381,7 @@ class BagelAdapter(BaseAdapter):
             if isinstance(condition_image_size, int) else condition_image_size
         )
 
-        device = device or self.pipeline.vae.device
+        device = device or self.device
 
         pil_images : List[List[Image.Image]] = [
             self.standardize_images(imgs, output_type='pil')
