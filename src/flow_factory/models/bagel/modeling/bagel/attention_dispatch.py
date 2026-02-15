@@ -13,7 +13,6 @@ Bagel's NaViT-style packed sequences where inputs are
 Supported backends:
 
 - **auto**: FA3 → FA2 → SDPA (first available)
-- **flash3**: Flash Attention 3 (Hopper sm90 kernels, H100/H200 only)
 - **flash**: Flash Attention 2 (Ampere+)
 - **sdpa**: PyTorch ``F.scaled_dot_product_attention`` with per-sequence split
 - **eager**: Manual matmul + softmax (debug / reference)
@@ -23,7 +22,7 @@ Usage::
     from .attention_dispatch import varlen_attention, set_attn_backend, AttnBackend
 
     # Global default (set once at init)
-    set_attn_backend(AttnBackend.FLASH3)
+    set_attn_backend(AttnBackend.FLASH)
 
     # Per-call override
     out = varlen_attention(q, k, v, cu_seqlens_q, cu_seqlens_k,
@@ -39,7 +38,7 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
-from transformers.utils.import_utils import is_flash_attn_2_available, is_flash_attn_3_available
+from transformers.utils.import_utils import is_flash_attn_2_available
 
 logger = logging.getLogger(__name__)
 
@@ -48,17 +47,7 @@ logger = logging.getLogger(__name__)
 # We use transformers' availability guards for resolution but defer the actual
 # import until first call, avoiding import errors at module load time.
 
-_fa3_varlen_func = None
 _fa2_varlen_func = None
-
-
-def _get_fa3_varlen_func():
-    """Lazy-import FA3's ``flash_attn_varlen_func`` on first use."""
-    global _fa3_varlen_func
-    if _fa3_varlen_func is None:
-        from flash_attn_interface import flash_attn_varlen_func
-        _fa3_varlen_func = flash_attn_varlen_func
-    return _fa3_varlen_func
 
 
 def _get_fa2_varlen_func():
@@ -75,7 +64,6 @@ def _get_fa2_varlen_func():
 class AttnBackend(str, Enum):
     """Supported attention backends for varlen packed sequences."""
     AUTO   = "auto"     # fa3 → fa2 → sdpa (first available)
-    FLASH3 = "flash3"   # Flash Attention 3 (Hopper sm90, H100/H200)
     FLASH  = "flash"    # Flash Attention 2 (Ampere+)
     SDPA   = "sdpa"     # torch SDPA with per-sequence splitting
     EAGER  = "eager"    # manual matmul + softmax (debug / reference)
@@ -88,7 +76,7 @@ def set_attn_backend(backend: str | AttnBackend) -> None:
     """Set the global default attention backend.
 
     Args:
-        backend: One of ``"auto"``, ``"flash3"``, ``"flash"``, ``"sdpa"``,
+        backend: One of ``"auto"``, ``"flash"``, ``"sdpa"``,
                  ``"eager"``.
     """
     global _GLOBAL_BACKEND
@@ -104,7 +92,6 @@ def get_attn_backend() -> AttnBackend:
 # ── Resolution logic ─────────────────────────────────────────────────────────
 
 _FALLBACK_CHAIN = [
-    (AttnBackend.FLASH3, is_flash_attn_3_available),
     (AttnBackend.FLASH,  is_flash_attn_2_available),
     (AttnBackend.SDPA,   lambda: True),
 ]
@@ -122,12 +109,6 @@ def _resolve_backend(backend: Optional[AttnBackend]) -> AttnBackend:
         return AttnBackend.EAGER  # unreachable, but safe
 
     # Explicit backend — verify availability and cascade
-    if backend == AttnBackend.FLASH3 and not is_flash_attn_3_available():
-        _warn_once(
-            "flash3 (Hopper) requested but not available; trying flash-attn-2."
-        )
-        backend = AttnBackend.FLASH
-
     if backend == AttnBackend.FLASH and not is_flash_attn_2_available():
         _warn_once("flash (FA2) requested but not available; falling back to SDPA.")
         backend = AttnBackend.SDPA
@@ -136,30 +117,6 @@ def _resolve_backend(backend: Optional[AttnBackend]) -> AttnBackend:
 
 
 # ── Backend implementations ──────────────────────────────────────────────────
-
-def _flash3_varlen(
-    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
-    cu_seqlens_q: torch.Tensor, cu_seqlens_k: torch.Tensor,
-    max_seqlen_q: int, max_seqlen_k: int,
-    causal: bool = False, dropout_p: float = 0.0,
-) -> torch.Tensor:
-    """Flash Attention 3 varlen backend (Hopper sm90 kernels).
-
-    FA3 provides ~1.5-2x throughput over FA2 on H100/H200.
-    Note: FA3 does **not** support ``dropout_p``; accepted for API uniformity.
-    Expects ``(total_tokens, num_heads, head_dim)`` layout.
-    """
-    fn = _get_fa3_varlen_func()
-    dtype = q.dtype if q.dtype in (torch.float16, torch.bfloat16) else torch.bfloat16
-    out = fn(
-        q.to(dtype), k.to(dtype), v.to(dtype),
-        cu_seqlens_q.to(torch.int32), cu_seqlens_k.to(torch.int32),
-        max_seqlen_q, max_seqlen_k,
-        causal=causal,
-    )
-    # FA3 returns (out, softmax_lse, *rest)
-    return out[0] if isinstance(out, tuple) else out
-
 
 def _flash2_varlen(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
@@ -241,7 +198,6 @@ def _eager_varlen(
 
 
 _BACKEND_FN = {
-    AttnBackend.FLASH3: _flash3_varlen,
     AttnBackend.FLASH:  _flash2_varlen,
     AttnBackend.SDPA:   _sdpa_varlen,
     AttnBackend.EAGER:  _eager_varlen,
@@ -278,7 +234,7 @@ def varlen_attention(
         max_seqlen_k: Maximum key sequence length.
         causal: Whether to apply causal masking.
         dropout_p: Dropout probability (training only).
-        backend: Override backend (``"auto"``, ``"flash3"``, ``"flash"``,
+        backend: Override backend (``"auto"``, ``"flash"``,
                  ``"sdpa"``, ``"eager"``). ``None`` uses the global default.
 
     Returns:
