@@ -138,6 +138,9 @@ class Qwen2Config(PretrainedConfig):
         sliding_window=4096,
         max_window_layers=28,
         attention_dropout=0.0,
+        pad_token_id: int | None = None,
+        bos_token_id: int | None = None,
+        eos_token_id: int | None = None,
         is_causal=True,
         _attn_implementation="flash_attention_2",
         **kwargs,
@@ -164,6 +167,9 @@ class Qwen2Config(PretrainedConfig):
         self.rope_theta = rope_theta
         self.rope_scaling = rope_scaling
         self.attention_dropout = attention_dropout
+        self.pad_token_id = pad_token_id
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
         self.is_causal = is_causal
         self._attn_implementation = _attn_implementation
 
