@@ -39,7 +39,7 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
-from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
+from transformers.utils.import_utils import is_flash_attn_2_available, is_flash_attn_3_available
 
 logger = logging.getLogger(__name__)
 
