@@ -310,6 +310,13 @@ class BagelAdapter(BaseAdapter):
 
         return {"condition_images": condition_images}
 
+    def encode_video(
+        self,
+        videos: Any
+    ):
+        """No need fot Bagel to encode video."""
+        pass
+
     # ======================== Decoding ========================
 
     def decode_latents(
