@@ -84,9 +84,7 @@ def _resolve_model_path(model_path: str, **kwargs) -> str:
     }
     dl_kwargs = {k: v for k, v in kwargs.items() if k in _SNAPSHOT_KEYS}
 
-    logger.info("Downloading Bagel checkpoint from HuggingFace Hub: %s", model_path)
     local_dir = snapshot_download(repo_id=model_path, **dl_kwargs)
-    logger.info("Checkpoint cached at: %s", local_dir)
     return local_dir
 
 # ===========================================================================
