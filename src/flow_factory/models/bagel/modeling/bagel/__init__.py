@@ -5,7 +5,7 @@
 from .bagel import BagelConfig, Bagel
 from .qwen2_navit import Qwen2Config, Qwen2Model, Qwen2ForCausalLM
 from .siglip_navit import SiglipVisionConfig, SiglipVisionModel
-
+from .modeling_utils import TimestepEmbedder, MLPconnector, PositionEmbedding
 
 __all__ = [
     'BagelConfig',
@@ -15,4 +15,8 @@ __all__ = [
     'Qwen2ForCausalLM',
     'SiglipVisionConfig',
     'SiglipVisionModel',
+
+    'TimestepEmbedder',
+    'MLPconnector',
+    'PositionEmbedding',
 ]
