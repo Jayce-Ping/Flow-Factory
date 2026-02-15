@@ -853,7 +853,7 @@ class BagelAdapter(BaseAdapter):
             return v.to(device) if isinstance(v, torch.Tensor) else None
 
         # 4. Flow velocity prediction (gradient-safe)
-        v_t = self._forward_flow(
+        noise_pred = self._forward_flow(
             x_t=latents,
             timestep=timestep_for_bagel,
             packed_vae_token_indexes=packed_vae_token_indexes.to(device),
@@ -882,7 +882,6 @@ class BagelAdapter(BaseAdapter):
             cfg_img_packed_key_value_indexes=_cfg(cfg_img_generation_input, "cfg_packed_key_value_indexes"),
             cfg_type="parallel",
         )
-        noise_pred = - v_t
 
         # 5. Scheduler step
         scheduler_output = self.scheduler.step(
