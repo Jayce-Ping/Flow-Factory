@@ -149,7 +149,7 @@ class BagelAdapter(BaseAdapter):
     def _init_tokenizer_and_transforms(self):
         """Initialize tokenizer, special tokens, and image transforms."""
         from .modeling.qwen2 import Qwen2Tokenizer
-        from .data_utils import add_special_tokens
+        from .data.data_utils import add_special_tokens
         from .data.transforms import ImageTransform
 
         self._tokenizer = Qwen2Tokenizer.from_pretrained(self._model_path)

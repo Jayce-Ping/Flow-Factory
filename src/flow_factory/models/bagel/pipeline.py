@@ -143,10 +143,10 @@ class BagelPseudoPipeline:
 
         # Choose position-id function
         if self.interpolate_pos:
-            from .data_utils import get_flattened_position_ids_interpolate
+            from .data.data_utils import get_flattened_position_ids_interpolate
             self.get_flattened_position_ids = get_flattened_position_ids_interpolate
         else:
-            from .data_utils import get_flattened_position_ids_extrapolate
+            from .data.data_utils import get_flattened_position_ids_extrapolate
             self.get_flattened_position_ids = get_flattened_position_ids_extrapolate
 
     # ════════════════════════════════════════════════════════════════
@@ -257,7 +257,7 @@ class BagelPseudoPipeline:
 
     def prepare_vit_images(self, curr_kvlens, curr_rope, images, transforms, new_token_ids):
         """Prepare ViT image tokens for KV-cache update."""
-        from .data_utils import patchify
+        from .data.data_utils import patchify
 
         packed_vit_token_indexes = []
         vit_token_seqlens, packed_vit_tokens, packed_vit_position_ids = [], [], []
