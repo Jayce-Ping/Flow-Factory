@@ -632,28 +632,22 @@ class BagelAdapter(BaseAdapter):
                 capturable={"noise_level": current_noise_level},
             )
 
-        # 5. Unpack final latent
-        # H, W = image_shape
-        # ds = self.pipeline.latent_downsample
-        # p = self.pipeline.latent_patch_size
-        # ch = self.pipeline.latent_channel
-        # h, w = H // ds, W // ds
-        # unpacked = x_t.reshape(1, h, w, p, p, ch)
-        # unpacked = torch.einsum("nhwpqc->nchpwq", unpacked).reshape(1, ch, h * p, w * p)
-
+        # 5. Return info
+        extra_call_back_res = callback_collector.get_result()          # (B, len(trajectory_indices), ...)
+        callback_index_map = callback_collector.get_index_map()        # (T,) LongTensor
+        all_latents = latent_collector.get_result()                    # List[torch.Tensor(B, ...)]
+        latent_index_map = latent_collector.get_index_map()            # (T+1,) LongTensor
+        all_log_probs = log_prob_collector.get_result() if compute_log_prob else None
+        log_prob_index_map = log_prob_collector.get_index_map() if compute_log_prob else None
         return {
             "final_packed_latent": x_t,
-            "all_latents": latent_collector.get_result(),
-            "all_log_probs": (
-                log_prob_collector.get_result() if log_prob_collector else None
-            ),
+            "all_latents": torch.stack([lat[b] for lat in all_latents], dim=0) if all_latents is not None else None,
+            "all_log_probs": torch.stack([lp[b] for lp in all_log_probs], dim=0) if all_log_probs is not None else None,
             "timesteps": timesteps,
-            "latent_index_map": latent_collector.get_index_map(),
-            "log_prob_index_map": (
-                log_prob_collector.get_index_map() if log_prob_collector else None
-            ),
-            "callback_results": callback_collector.get_result(),
-            "callback_index_map": callback_collector.get_index_map(),
+            "latent_index_map": latent_index_map,
+            "log_prob_index_map": log_prob_index_map,
+            "callback_results": extra_call_back_res,
+            "callback_index_map": callback_index_map,
         }
 
     # ======================== Forward (Training & Inference) ========================
