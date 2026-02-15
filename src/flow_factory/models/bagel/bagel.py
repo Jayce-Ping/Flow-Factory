@@ -252,31 +252,6 @@ class BagelAdapter(BaseAdapter):
         except ImportError:
             pass
 
-    # ======================== Mode Management ========================
-
-    # @property
-    # def mode(self) -> str:
-    #     return self._mode
-
-    # def eval(self):
-    #     """Set all components to evaluation mode."""
-    #     super().eval()
-    #     for comp in self.pipeline.named_components().values():
-    #         comp.eval()
-
-    # def rollout(self, *args, **kwargs):
-    #     """Set model to rollout mode (eval for all components)."""
-    #     self.eval()
-    #     if hasattr(self.scheduler, 'rollout'):
-    #         self.scheduler.rollout(*args, **kwargs)
-
-    # def train(self, mode: bool = True):
-    #     """Set trainable components to training mode."""
-    #     super().train(mode)
-    #     if mode:
-    #         # Only transformer is trainable; other components stay frozen
-    #         self.pipeline.transformer.train()
-
     # ======================== Encoding ========================
 
     def encode_prompt(

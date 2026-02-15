@@ -29,11 +29,14 @@ from typing import Optional, Any, Dict, List, Tuple
 
 import torch
 import torch.nn as nn
+from transformers.configuration_utils import PretrainedConfig
 from .modeling import (
     Qwen2ForCausalLM,
+    Qwen2Config,
     SiglipVisionModel,
+    SiglipVisionConfig,
     AutoEncoder,
-    BagelConfig,
+    AutoEncoderParams,
     TimestepEmbedder,
     MLPconnector,
     PositionEmbedding
@@ -86,6 +89,39 @@ def _resolve_model_path(model_path: str, **kwargs) -> str:
     logger.info("Checkpoint cached at: %s", local_dir)
     return local_dir
 
+# ===========================================================================
+# BagelConfig
+# ==========================================================================
+
+class BagelConfig(PretrainedConfig):
+    def __init__(
+        self,
+        llm_config : Qwen2Config,
+        vit_config : SiglipVisionConfig,
+        vae_config : AutoEncoderParams,
+        visual_gen : bool = True,
+        visual_und : bool = True,
+        latent_patch_size : int = 2,
+        max_latent_size : int = 32,
+        vit_max_num_patch_per_side : int = 70,
+        connector_act : str ="gelu_pytorch_tanh",
+        interpolate_pos : bool = False,
+        timestep_shift : float = 1.0,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.visual_gen = visual_gen
+        self.visual_und = visual_und
+        self.llm_config = llm_config
+        self.vit_config = vit_config
+        self.vae_config = vae_config
+        self.latent_patch_size = latent_patch_size
+        self.max_latent_size = max_latent_size
+        self.vit_max_num_patch_per_side = vit_max_num_patch_per_side
+        self.connector_act = connector_act
+        self.interpolate_pos = interpolate_pos
+        self.timestep_shift = timestep_shift
+
 
 # ============================================================================
 # BagelPseudoPipeline
@@ -101,16 +137,16 @@ class BagelPseudoPipeline:
 
     def __init__(
         self,
-        config: "BagelConfig",                    # BagelConfig
-        transformer: "Qwen2ForCausalLM",        # Qwen2ForCausalLM
-        vit: "SiglipVisionModel",                 # SiglipVisionModel
-        vae: "AutoEncoder",                 # AutoEncoder
+        config: BagelConfig,                    # BagelConfig
+        transformer: Qwen2ForCausalLM,        # Qwen2ForCausalLM
+        vit: SiglipVisionModel,                 # SiglipVisionModel
+        vae: AutoEncoder,                 # AutoEncoder
         vae2llm: nn.Linear,
         llm2vae: nn.Linear,
-        time_embedder: "TimestepEmbedder",       # TimestepEmbedder
-        latent_pos_embed: "PositionEmbedding",    # PositionEmbedding
-        connector: "MLPconnector",           # MLPconnector
-        vit_pos_embed: "PositionEmbedding",       # PositionEmbedding
+        time_embedder: TimestepEmbedder,       # TimestepEmbedder
+        latent_pos_embed: PositionEmbedding,    # PositionEmbedding
+        connector: MLPconnector,           # MLPconnector
+        vit_pos_embed: PositionEmbedding,       # PositionEmbedding
         scheduler: Optional[Any] = None,
     ):
         # ── Direct ownership — single source of truth ──
@@ -169,7 +205,6 @@ class BagelPseudoPipeline:
         the flat ``transformer.*`` / ``vit.*`` layout.
         """
         from .modeling.bagel import (
-            BagelConfig,
             Qwen2Config, Qwen2ForCausalLM,
             SiglipVisionConfig, SiglipVisionModel,
         )
@@ -201,11 +236,11 @@ class BagelPseudoPipeline:
 
         # ── Bagel Config ──
         config = BagelConfig(
-            visual_gen=True,
-            visual_und=True,
             llm_config=llm_config,
             vit_config=vit_config,
             vae_config=vae_config,
+            visual_gen=True,
+            visual_und=True,
             vit_max_num_patch_per_side=kwargs.get("vit_max_num_patch_per_side", 70),
             connector_act=kwargs.get("connector_act", "gelu_pytorch_tanh"),
             latent_patch_size=kwargs.get("latent_patch_size", 2),

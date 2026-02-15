@@ -2,17 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .bagel import (
-    BagelConfig,
     Qwen2ForCausalLM, Qwen2Model, Qwen2Config,
     SiglipVisionConfig, SiglipVisionModel,
     TimestepEmbedder,
     MLPconnector,
     PositionEmbedding,
 )
-from .autoencoder import AutoEncoder
+from .autoencoder import AutoEncoder, AutoEncoderParams
 
 __all__ = [
-    'BagelConfig',
     'Qwen2ForCausalLM',
     'Qwen2Model',
     'Qwen2Config',
@@ -22,4 +20,5 @@ __all__ = [
     'MLPconnector',
     'PositionEmbedding',
     'AutoEncoder',
+    'AutoEncoderParams',
 ]
