@@ -804,9 +804,9 @@ class BagelAdapter(BaseAdapter):
 
         # 5. Scheduler step
         scheduler_output = self.scheduler.step(
-            model_output=v_t,
+            noise_pred=v_t,
             timestep=t,
-            sample=latents,
+            latents=latents,
             t_next=t_next,
             next_latents=next_latents,
             noise_level=noise_level,
