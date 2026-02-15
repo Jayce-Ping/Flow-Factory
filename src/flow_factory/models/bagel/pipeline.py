@@ -503,7 +503,7 @@ class BagelPseudoPipeline:
 
         extra = {"mode": "und"} if self.use_moe else {}
 
-        output = self.transformer.forward_inference(
+        output = self.transformer(
             packed_query_sequence=packed_text_embedding,
             query_lens=text_token_lens,
             packed_query_position_ids=packed_text_position_ids,
@@ -556,7 +556,7 @@ class BagelPseudoPipeline:
 
         extra = {"mode": "und"} if self.use_moe else {}
 
-        output = self.transformer.forward_inference(
+        output = self.transformer(
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
             packed_query_position_ids=packed_position_ids,
@@ -615,7 +615,7 @@ class BagelPseudoPipeline:
                 "packed_text_indexes": packed_text_indexes,
             }
 
-        output = self.transformer.forward_inference(
+        output = self.transformer(
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
             packed_query_position_ids=packed_position_ids,
@@ -694,7 +694,7 @@ class BagelPseudoPipeline:
             }
 
         # 4. LLM forward (main stream)
-        output = self.transformer.forward_inference(
+        output = self.transformer(
             packed_query_sequence=packed_sequence,
             query_lens=packed_seqlens,
             packed_query_position_ids=packed_position_ids,
@@ -760,7 +760,7 @@ class BagelPseudoPipeline:
             seq_len = x_emb.shape[0]
             cfg_seq = x_emb.new_zeros((seq_len, self.hidden_size))
             cfg_seq[:] = x_emb
-            out = self.transformer.forward_inference(
+            out = self.transformer(
                 packed_query_sequence=cfg_seq,
                 query_lens=torch.tensor([seq_len], dtype=torch.int, device=x_emb.device),
                 packed_query_position_ids=pos_ids,

@@ -67,6 +67,7 @@ from ...utils.image import (
 from ...utils.logger_utils import setup_logger
 
 from .pipeline import BagelPseudoPipeline
+from .modeling.bagel import NaiveCache
 
 logger = setup_logger(__name__)
 
@@ -469,68 +470,154 @@ class BagelAdapter(BaseAdapter):
     def _forward_flow(
         self,
         x_t: torch.Tensor,
-        timestep: torch.LongTensor,
-        packed_vae_token_indexes: torch.LongTensor,
-        packed_vae_position_ids: torch.LongTensor,
-        packed_text_ids: torch.LongTensor,
-        packed_text_indexes: torch.LongTensor,
-        packed_indexes: torch.LongTensor,
-        packed_position_ids: torch.LongTensor,
-        packed_seqlens: torch.IntTensor,
-        key_values_lens: torch.IntTensor,
-        past_key_values,
-        packed_key_value_indexes: torch.LongTensor,
+        timestep: torch.Tensor,
+        packed_vae_token_indexes: torch.Tensor,
+        packed_vae_position_ids: torch.Tensor,
+        packed_text_ids: torch.Tensor,
+        packed_text_indexes: torch.Tensor,
+        packed_indexes: torch.Tensor,
+        packed_position_ids: torch.Tensor,
+        packed_seqlens: torch.Tensor,
+        key_values_lens: torch.Tensor,
+        past_key_values: NaiveCache,
+        packed_key_value_indexes: torch.Tensor,
         cfg_renorm_min: float = 0.0,
         cfg_renorm_type: str = "global",
+        # cfg_text
         cfg_text_scale: float = 1.0,
-        cfg_text_packed_position_ids=None,
-        cfg_text_packed_query_indexes=None,
-        cfg_text_key_values_lens=None,
-        cfg_text_past_key_values=None,
-        cfg_text_packed_key_value_indexes=None,
+        cfg_text_packed_position_ids: Optional[torch.Tensor] = None,
+        cfg_text_packed_query_indexes: Optional[torch.Tensor] = None,
+        cfg_text_key_values_lens: Optional[torch.Tensor] = None,
+        cfg_text_past_key_values: Optional[NaiveCache] = None,
+        cfg_text_packed_key_value_indexes: Optional[torch.Tensor] = None,
+        # cfg_img
         cfg_img_scale: float = 1.0,
-        cfg_img_packed_position_ids=None,
-        cfg_img_packed_query_indexes=None,
-        cfg_img_key_values_lens=None,
-        cfg_img_past_key_values=None,
-        cfg_img_packed_key_value_indexes=None,
+        cfg_img_packed_position_ids: Optional[torch.Tensor] = None,
+        cfg_img_packed_query_indexes: Optional[torch.Tensor] = None,
+        cfg_img_key_values_lens: Optional[torch.Tensor] = None,
+        cfg_img_past_key_values: Optional[NaiveCache] = None,
+        cfg_img_packed_key_value_indexes: Optional[torch.Tensor] = None,
         cfg_type: str = "parallel",
+        # cache
+        model_pred_cache_dic: Optional[Dict[str, Any]] = None,
+        model_pred_current: Optional[int] = None,
+        model_pred_text_cache_dic: Optional[Dict[str, Any]] = None,
+        model_pred_text_current: Optional[int] = None,
+        model_pred_img_cache_dic: Optional[Dict[str, Any]] = None,
+        model_pred_img_current: Optional[int] = None,
     ):
-        """
-        Flow velocity prediction with CFG — delegates to pipeline.
+        packed_text_embedding = self.transformer.get_input_embeddings(packed_text_ids)
+        packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), self.pipeline.config.llm_config.hidden_size))
+        packed_sequence[packed_text_indexes] = packed_text_embedding
 
-        This is the grad-safe version (no @torch.no_grad) used during
-        RL training. Gradients flow through the LLM forward pass.
-        """
-        return self.pipeline.forward_denoise_step(
-            x_t=x_t,
-            timestep=timestep,
-            packed_vae_token_indexes=packed_vae_token_indexes,
-            packed_vae_position_ids=packed_vae_position_ids,
-            packed_text_ids=packed_text_ids,
-            packed_text_indexes=packed_text_indexes,
-            packed_indexes=packed_indexes,
-            packed_position_ids=packed_position_ids,
-            packed_seqlens=packed_seqlens,
-            key_values_lens=key_values_lens,
+        assert timestep.unique().shape[0] == 1
+        packed_pos_embed = self.pipeline.latent_pos_embed(packed_vae_position_ids)
+        packed_timestep_embeds = self.pipeline.time_embedder(timestep)
+        x_t = self.pipeline.vae2llm(x_t) + packed_timestep_embeds + packed_pos_embed
+        if x_t.dtype != packed_sequence.dtype:
+            x_t = x_t.to(packed_sequence.dtype)
+        packed_sequence[packed_vae_token_indexes] = x_t
+
+        extra_inputs = {}
+        if self.pipeline.use_moe:
+            extra_inputs = {
+                "mode": "gen",
+                "packed_vae_token_indexes": packed_vae_token_indexes,
+                "packed_text_indexes": packed_text_indexes
+            }
+        
+        if getattr(self.pipeline.transformer.model, "enable_taylorseer", False):
+            self.pipeline.transformer.model.cache_dic = model_pred_cache_dic
+            self.pipeline.transformer.model.current = model_pred_current
+
+        output = self.transformer(
+            packed_query_sequence=packed_sequence,
+            query_lens=packed_seqlens,
+            packed_query_position_ids=packed_position_ids,
+            packed_query_indexes=packed_indexes,
             past_key_values=past_key_values,
+            key_values_lens=key_values_lens,
             packed_key_value_indexes=packed_key_value_indexes,
-            cfg_renorm_min=cfg_renorm_min,
-            cfg_renorm_type=cfg_renorm_type,
-            cfg_text_scale=cfg_text_scale,
-            cfg_text_packed_position_ids=cfg_text_packed_position_ids,
-            cfg_text_packed_query_indexes=cfg_text_packed_query_indexes,
-            cfg_text_key_values_lens=cfg_text_key_values_lens,
-            cfg_text_past_key_values=cfg_text_past_key_values,
-            cfg_text_packed_key_value_indexes=cfg_text_packed_key_value_indexes,
-            cfg_img_scale=cfg_img_scale,
-            cfg_img_packed_position_ids=cfg_img_packed_position_ids,
-            cfg_img_packed_query_indexes=cfg_img_packed_query_indexes,
-            cfg_img_key_values_lens=cfg_img_key_values_lens,
-            cfg_img_past_key_values=cfg_img_past_key_values,
-            cfg_img_packed_key_value_indexes=cfg_img_packed_key_value_indexes,
-            cfg_type=cfg_type,
+            update_past_key_values=False,
+            is_causal=False,
+            **extra_inputs,
         )
+        v_t = self.pipeline.llm2vae(output.packed_query_sequence)
+        v_t = v_t[packed_vae_token_indexes]
+
+        if cfg_text_scale > 1.0:
+            if getattr(self.pipeline.transformer.model, "enable_taylorseer", False):
+                self.pipeline.transformer.model.cache_dic = model_pred_text_cache_dic
+                self.pipeline.transformer.model.current = model_pred_text_current
+            cfg_text_output = self.transformer(
+                packed_query_sequence=packed_sequence,
+                query_lens=packed_seqlens,
+                packed_query_position_ids=cfg_text_packed_position_ids,
+                packed_query_indexes=cfg_text_packed_query_indexes,
+                past_key_values=cfg_text_past_key_values,
+                key_values_lens=cfg_text_key_values_lens,
+                packed_key_value_indexes=cfg_text_packed_key_value_indexes,
+                update_past_key_values=False,
+                is_causal=False,
+                **extra_inputs,
+            )
+            cfg_text_v_t = self.pipeline.llm2vae(cfg_text_output.packed_query_sequence)
+            cfg_text_v_t = cfg_text_v_t[packed_vae_token_indexes]
+
+        if cfg_img_scale > 1.0:
+            if getattr(self.pipeline.transformer.model, "enable_taylorseer", False):
+                self.pipeline.transformer.model.cache_dic = model_pred_img_cache_dic
+                self.pipeline.transformer.model.current = model_pred_img_current
+            cfg_img_output = self.transformer(
+                packed_query_sequence=packed_sequence,
+                query_lens=packed_seqlens,
+                packed_query_position_ids=cfg_img_packed_position_ids,
+                packed_query_indexes=cfg_img_packed_query_indexes,
+                past_key_values=cfg_img_past_key_values,
+                key_values_lens=cfg_img_key_values_lens,
+                packed_key_value_indexes=cfg_img_packed_key_value_indexes,
+                update_past_key_values=False,
+                is_causal=False,
+                **extra_inputs,
+            )
+            cfg_img_v_t = self.pipeline.llm2vae(cfg_img_output.packed_query_sequence)
+            cfg_img_v_t = cfg_img_v_t[packed_vae_token_indexes]
+
+        if cfg_text_scale > 1.0:
+            if cfg_renorm_type == "text_channel":
+                v_t_text_ = cfg_text_v_t + cfg_text_scale * (v_t - cfg_text_v_t)
+                norm_v_t = torch.norm(v_t, dim=-1, keepdim=True)
+                norm_v_t_text_ = torch.norm(v_t_text_, dim=-1, keepdim=True)
+                scale = (norm_v_t / (norm_v_t_text_ + 1e-8)).clamp(min=cfg_renorm_min, max=1.0)
+                v_t_text = v_t_text_ * scale
+                if cfg_img_scale > 1.0:
+                    v_t = cfg_img_v_t + cfg_img_scale * (v_t_text - cfg_img_v_t)
+                else:
+                    v_t = v_t_text
+            else:
+                v_t_text_ = cfg_text_v_t + cfg_text_scale * (v_t - cfg_text_v_t)
+                
+                if cfg_img_scale > 1.0:
+                    v_t_ = cfg_img_v_t + cfg_img_scale * (v_t_text_ - cfg_img_v_t)
+                else:
+                    v_t_ = v_t_text_
+
+                # NOTE norm is computed over all dimensions, thus currently only supports batch_size = 1 with navit
+                if cfg_renorm_type == "global":
+                    norm_v_t = torch.norm(v_t)
+                    norm_v_t_ = torch.norm(v_t_)
+                elif cfg_renorm_type == "channel":
+                    norm_v_t = torch.norm(v_t, dim=-1, keepdim=True)
+                    norm_v_t_ = torch.norm(v_t_, dim=-1, keepdim=True)
+                else:
+                    raise NotImplementedError(f"{cfg_renorm_type} is not suppoprted")
+                scale = (norm_v_t / (norm_v_t_ + 1e-8)).clamp(min=cfg_renorm_min, max=1.0)
+                v_t = v_t_ * scale
+        else:
+            # No CFG
+            pass
+
+        return v_t
 
     # ======================== Denoising Loop ========================
 
@@ -795,10 +882,11 @@ class BagelAdapter(BaseAdapter):
             cfg_img_packed_key_value_indexes=_cfg(cfg_img_generation_input, "cfg_packed_key_value_indexes"),
             cfg_type="parallel",
         )
+        noise_pred = - v_t
 
         # 5. Scheduler step
         scheduler_output = self.scheduler.step(
-            noise_pred=-v_t,
+            noise_pred=noise_pred,
             timestep=t,
             latents=latents,
             timestep_next=t_next,

@@ -3,13 +3,15 @@
 
 
 from .bagel import BagelConfig, Bagel
-from .qwen2_navit import Qwen2Config, Qwen2Model, Qwen2ForCausalLM
+from .qwen2_navit import Qwen2Config, Qwen2Model, Qwen2ForCausalLM, NaiveCache
 from .siglip_navit import SiglipVisionConfig, SiglipVisionModel
 from .modeling_utils import TimestepEmbedder, MLPconnector, PositionEmbedding
 
 __all__ = [
     'BagelConfig',
     'Bagel',
+
+    'NaiveCache',
     'Qwen2Config',
     'Qwen2Model', 
     'Qwen2ForCausalLM',

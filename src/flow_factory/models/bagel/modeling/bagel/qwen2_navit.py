@@ -1117,8 +1117,8 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel):
                 original_name = name.replace("_moe_gen", "")
                 param.data.copy_(self.state_dict()[original_name].data)
 
-    def get_input_embeddings(self):
-        return self.model.embed_tokens
+    def get_input_embeddings(self, ids):
+        return self.model.embed_tokens(ids)
 
     def set_input_embeddings(self, value):
         self.model.embed_tokens = value
@@ -1135,34 +1135,7 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel):
     def get_decoder(self):
         return self.model
 
-    def forward(self, *args, **kwargs):
-        return self.forward_inference(*args, **kwargs)
-        if self.training:
-            return self.forward_train(*args, **kwargs)
-        else:
-            return self.forward_inference(*args, **kwargs)
-
-    def forward_train(
-        self,
-        packed_sequence: torch.Tensor,
-        sample_lens: List[int],
-        attention_mask,
-        packed_position_ids: torch.Tensor,
-        packed_und_token_indexes: Optional[torch.LongTensor] = None,
-        packed_gen_token_indexes: Optional[torch.LongTensor] = None,
-    ) -> torch.Tensor:
-
-        outputs = self.model(
-            packed_sequence=packed_sequence,
-            sample_lens=sample_lens,
-            packed_position_ids=packed_position_ids,
-            attention_mask=attention_mask,
-            packed_und_token_indexes=packed_und_token_indexes,
-            packed_gen_token_indexes=packed_gen_token_indexes,
-        )
-        return outputs
-
-    def forward_inference(
+    def forward(
         self,
         packed_query_sequence: torch.Tensor,
         query_lens: torch.Tensor,
