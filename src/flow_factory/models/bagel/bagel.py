@@ -506,7 +506,7 @@ class BagelAdapter(BaseAdapter):
         model_pred_img_cache_dic: Optional[Dict[str, Any]] = None,
         model_pred_img_current: Optional[int] = None,
     ):
-        packed_text_embedding = self.transformer.get_input_embeddings(packed_text_ids)
+        packed_text_embedding = self.pipeline.transformer.get_input_embeddings(packed_text_ids)
         packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), self.pipeline.config.llm_config.hidden_size))
         packed_sequence[packed_text_indexes] = packed_text_embedding
 

@@ -71,7 +71,7 @@ train:
   per_device_batch_size: 1  # Batch size per device
   group_size: 16  # Group size for GRPO sampling
   global_std: false  # Use global std for advantage normalization
-  unique_sample_num_per_epoch: 48  # Unique samples per group
+  unique_sample_num_per_epoch: 8  # Unique samples per group
   gradient_step_per_epoch: 1  # Gradient steps per epoch. The first step is on-policy, the rest are off-policy.
     
   # Optimization

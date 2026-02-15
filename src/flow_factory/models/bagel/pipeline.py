@@ -150,6 +150,137 @@ class BagelPseudoPipeline:
             self.get_flattened_position_ids = get_flattened_position_ids_extrapolate
 
     # ════════════════════════════════════════════════════════════════
+    # from_pretrained (Flat Loading)
+    # ════════════════════════════════════════════════════════════════
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_path: str,
+        vae_path: Optional[str] = None,
+        low_cpu_mem_usage: bool = False,
+        **kwargs,
+    ) -> "BagelPseudoPipeline":
+        """
+        Load and construct all components individually (no Bagel wrapper).
+
+        Weights are loaded from ``ema.safetensors`` and remapped from
+        the original ``language_model.*`` / ``vit_model.*`` prefixes to
+        the flat ``transformer.*`` / ``vit.*`` layout.
+        """
+        from .modeling.bagel import (
+            BagelConfig,
+            Qwen2Config, Qwen2ForCausalLM,
+            SiglipVisionConfig, SiglipVisionModel,
+        )
+        from .modeling.bagel.modeling_utils import MLPconnector, TimestepEmbedder, PositionEmbedding
+        from .modeling.autoencoder import load_ae
+        from safetensors.torch import load_file
+
+        # ── Resolve to local directory ──
+        model_path = _resolve_model_path(model_path, **kwargs)
+
+        # ── LLM Config ──
+        llm_config = Qwen2Config.from_json_file(
+            os.path.join(model_path, "llm_config.json")
+        )
+        llm_config.qk_norm = True
+        llm_config.tie_word_embeddings = False
+        llm_config.layer_module = kwargs.get("layer_module", "Qwen2MoTDecoderLayer")
+
+        # ── ViT Config ──
+        vit_config = SiglipVisionConfig.from_json_file(
+            os.path.join(model_path, "vit_config.json")
+        )
+        vit_config.rope = kwargs.get("vit_rope", False)
+        vit_config.num_hidden_layers = vit_config.num_hidden_layers - 1
+
+        # ── VAE ──
+        ae_path = vae_path or os.path.join(model_path, "ae.safetensors")
+        vae_model, vae_config = load_ae(local_path=ae_path)
+
+        # ── Bagel Config ──
+        config = BagelConfig(
+            visual_gen=True,
+            visual_und=True,
+            llm_config=llm_config,
+            vit_config=vit_config,
+            vae_config=vae_config,
+            vit_max_num_patch_per_side=kwargs.get("vit_max_num_patch_per_side", 70),
+            connector_act=kwargs.get("connector_act", "gelu_pytorch_tanh"),
+            latent_patch_size=kwargs.get("latent_patch_size", 2),
+            max_latent_size=kwargs.get("max_latent_size", 64),
+        )
+
+        # ── Derived dims ──
+        hidden_size = llm_config.hidden_size
+        vit_hidden_size = vit_config.hidden_size
+        patch_latent_dim = config.latent_patch_size ** 2 * vae_config.z_channels
+
+        # ── Build components independently ──
+        if low_cpu_mem_usage:
+            from accelerate import init_empty_weights
+            ctx = init_empty_weights()
+        else:
+            from contextlib import nullcontext
+            ctx = nullcontext()
+
+        with ctx:
+            transformer = Qwen2ForCausalLM(llm_config)
+            vit = SiglipVisionModel(vit_config)
+            vae2llm = nn.Linear(patch_latent_dim, hidden_size)
+            llm2vae = nn.Linear(hidden_size, patch_latent_dim)
+            time_embedder = TimestepEmbedder(hidden_size)
+            latent_pos_embed = PositionEmbedding(config.max_latent_size, hidden_size)
+            connector = MLPconnector(vit_hidden_size, hidden_size, config.connector_act)
+            vit_pos_embed = PositionEmbedding(config.vit_max_num_patch_per_side, hidden_size)
+
+        # Convert ViT conv2d → linear
+        vit.vision_model.embeddings.convert_conv2d_to_linear(
+            vit_config, meta=low_cpu_mem_usage
+        )
+
+        # ── Load & remap weights ──
+        if not low_cpu_mem_usage:
+            ema_path = os.path.join(model_path, "ema.safetensors")
+            if os.path.exists(ema_path):
+                raw_sd = load_file(ema_path)
+                flat_sd = _remap_state_dict(raw_sd)
+
+                # Load into each component by prefix
+                component_map = {
+                    "transformer.": transformer,
+                    "vit.": vit,
+                    "vae2llm.": vae2llm,
+                    "llm2vae.": llm2vae,
+                    "time_embedder.": time_embedder,
+                    "latent_pos_embed.": latent_pos_embed,
+                    "connector.": connector,
+                    "vit_pos_embed.": vit_pos_embed,
+                }
+                for prefix, module in component_map.items():
+                    sub_sd = {
+                        k[len(prefix):]: v
+                        for k, v in flat_sd.items()
+                        if k.startswith(prefix)
+                    }
+                    if sub_sd:
+                        module.load_state_dict(sub_sd, strict=False)
+
+        return cls(
+            config=config,
+            transformer=transformer,
+            vit=vit,
+            vae=vae_model,
+            vae2llm=vae2llm,
+            llm2vae=llm2vae,
+            time_embedder=time_embedder,
+            latent_pos_embed=latent_pos_embed,
+            connector=connector,
+            vit_pos_embed=vit_pos_embed,
+        )
+
+    # ════════════════════════════════════════════════════════════════
     # Component Enumeration
     # ════════════════════════════════════════════════════════════════
 
@@ -397,6 +528,7 @@ class BagelPseudoPipeline:
 
     def prepare_vae_latent(self, curr_kvlens, curr_rope, image_sizes, new_token_ids, device=None):
         """Prepare packed latent generation inputs for denoising."""
+        device = device or self.device
         packed_vae_position_ids = []
         packed_vae_token_indexes = []
         packed_text_ids, packed_text_indexes = [], []
@@ -458,12 +590,12 @@ class BagelPseudoPipeline:
         return generation_input
 
     def prepare_vae_latent_cfg(self, curr_kvlens, curr_rope, image_sizes, device=None):
-        """Prepare CFG variants of latent generation inputs."""
+        device = device or self.device
         packed_position_ids = []
         packed_indexes = []
         packed_key_value_indexes = []
 
-        curr = 0
+        query_curr = curr = 0
         for (H, W), curr_kvlen, curr_position_id in zip(image_sizes, curr_kvlens, curr_rope):
             packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
             curr += curr_kvlen
@@ -471,10 +603,20 @@ class BagelPseudoPipeline:
             h, w = H // self.latent_downsample, W // self.latent_downsample
             num_vae_tokens = h * w
 
-            # CFG only needs indexes + position_ids for the vae token portion
+            # start_of_image token
+            packed_indexes.append(curr)
+            curr += 1
+
+            # VAE tokens
             packed_indexes.extend(range(curr, curr + num_vae_tokens))
-            packed_position_ids.extend([curr_position_id] * num_vae_tokens)
             curr += num_vae_tokens
+
+            # end_of_image token
+            packed_indexes.append(curr)
+            curr += 1
+
+            # Position IDs for ALL tokens (vae + 2 text markers)
+            packed_position_ids.extend([curr_position_id] * (num_vae_tokens + 2))
 
         return {
             "cfg_packed_position_ids": torch.tensor(packed_position_ids, dtype=torch.long, device=device),
@@ -628,316 +770,3 @@ class BagelPseudoPipeline:
             **extra,
         )
         return output.past_key_values
-
-    # ════════════════════════════════════════════════════════════════
-    # Forward Denoise Step
-    # ════════════════════════════════════════════════════════════════
-
-    def forward_denoise_step(
-        self,
-        x_t: torch.Tensor,
-        timestep: torch.Tensor,
-        packed_vae_token_indexes: torch.LongTensor,
-        packed_vae_position_ids: torch.LongTensor,
-        packed_text_ids: torch.LongTensor,
-        packed_text_indexes: torch.LongTensor,
-        packed_indexes: torch.LongTensor,
-        packed_position_ids: torch.LongTensor,
-        packed_seqlens: torch.IntTensor,
-        key_values_lens: torch.IntTensor,
-        past_key_values,
-        packed_key_value_indexes: torch.LongTensor,
-        # CFG params
-        cfg_renorm_min: float = 0.0,
-        cfg_renorm_type: str = "global",
-        cfg_text_scale: float = 1.0,
-        cfg_text_packed_position_ids: Optional[torch.LongTensor] = None,
-        cfg_text_packed_query_indexes: Optional[torch.LongTensor] = None,
-        cfg_text_key_values_lens: Optional[torch.Tensor] = None,
-        cfg_text_past_key_values=None,
-        cfg_text_packed_key_value_indexes: Optional[torch.LongTensor] = None,
-        cfg_img_scale: float = 1.0,
-        cfg_img_packed_position_ids: Optional[torch.LongTensor] = None,
-        cfg_img_packed_query_indexes: Optional[torch.LongTensor] = None,
-        cfg_img_key_values_lens: Optional[torch.Tensor] = None,
-        cfg_img_past_key_values=None,
-        cfg_img_packed_key_value_indexes: Optional[torch.LongTensor] = None,
-        cfg_type: str = "parallel",
-    ) -> torch.Tensor:
-        """
-        Single denoising step: embed x_t → LLM forward → extract v_t → apply CFG.
-
-        Returns:
-            v_t: Flow velocity prediction (after CFG).
-        """
-        # 1. Build packed sequence
-        packed_text_embedding = self.transformer.model.embed_tokens(packed_text_ids)
-        packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), self.hidden_size))
-        packed_sequence[packed_text_indexes] = packed_text_embedding
-
-        # 2. Embed noisy latent
-        assert timestep.unique().shape[0] == 1
-        packed_pos_embed = self.latent_pos_embed(packed_vae_position_ids)
-        packed_timestep_embeds = self.time_embedder(timestep)
-        x_emb = self.vae2llm(x_t) + packed_timestep_embeds + packed_pos_embed
-        if x_emb.dtype != packed_sequence.dtype:
-            x_emb = x_emb.to(packed_sequence.dtype)
-        packed_sequence[packed_vae_token_indexes] = x_emb
-
-        # 3. MoE extras
-        extra = {}
-        if self.use_moe:
-            extra = {
-                "mode": "gen",
-                "packed_vae_token_indexes": packed_vae_token_indexes,
-                "packed_text_indexes": packed_text_indexes,
-            }
-
-        # 4. LLM forward (main stream)
-        output = self.transformer(
-            packed_query_sequence=packed_sequence,
-            query_lens=packed_seqlens,
-            packed_query_position_ids=packed_position_ids,
-            packed_query_indexes=packed_indexes,
-            past_key_values=past_key_values,
-            key_values_lens=key_values_lens,
-            packed_key_value_indexes=packed_key_value_indexes,
-            update_past_key_values=False,
-            is_causal=False,
-            **extra,
-        )
-        v_t = self.llm2vae(output.packed_query_sequence)[packed_vae_token_indexes]
-
-        # 5. Apply CFG
-        v_t = self._apply_cfg(
-            v_t=v_t,
-            x_emb=x_emb,
-            packed_vae_token_indexes=packed_vae_token_indexes,
-            cfg_renorm_min=cfg_renorm_min,
-            cfg_renorm_type=cfg_renorm_type,
-            cfg_text_scale=cfg_text_scale,
-            cfg_text_packed_position_ids=cfg_text_packed_position_ids,
-            cfg_text_packed_query_indexes=cfg_text_packed_query_indexes,
-            cfg_text_key_values_lens=cfg_text_key_values_lens,
-            cfg_text_past_key_values=cfg_text_past_key_values,
-            cfg_text_packed_key_value_indexes=cfg_text_packed_key_value_indexes,
-            cfg_img_scale=cfg_img_scale,
-            cfg_img_packed_position_ids=cfg_img_packed_position_ids,
-            cfg_img_packed_query_indexes=cfg_img_packed_query_indexes,
-            cfg_img_key_values_lens=cfg_img_key_values_lens,
-            cfg_img_past_key_values=cfg_img_past_key_values,
-            cfg_img_packed_key_value_indexes=cfg_img_packed_key_value_indexes,
-            cfg_type=cfg_type,
-        )
-        return v_t
-
-    def _apply_cfg(
-        self,
-        v_t: torch.Tensor,
-        x_emb: torch.Tensor,
-        packed_vae_token_indexes: torch.LongTensor,
-        cfg_renorm_min: float,
-        cfg_renorm_type: str,
-        cfg_text_scale: float,
-        cfg_text_packed_position_ids, cfg_text_packed_query_indexes,
-        cfg_text_key_values_lens, cfg_text_past_key_values,
-        cfg_text_packed_key_value_indexes,
-        cfg_img_scale: float,
-        cfg_img_packed_position_ids, cfg_img_packed_query_indexes,
-        cfg_img_key_values_lens, cfg_img_past_key_values,
-        cfg_img_packed_key_value_indexes,
-        cfg_type: str,
-    ) -> torch.Tensor:
-        """Apply classifier-free guidance with optional renormalization."""
-        need_text_cfg = cfg_text_scale != 1.0 and cfg_text_past_key_values is not None
-        need_img_cfg = cfg_img_scale != 1.0 and cfg_img_past_key_values is not None
-
-        if not need_text_cfg and not need_img_cfg:
-            return v_t
-
-        # CFG forward helper
-        def _cfg_forward(past_kv, pos_ids, query_idx, kv_lens, kv_idx):
-            seq_len = x_emb.shape[0]
-            cfg_seq = x_emb.new_zeros((seq_len, self.hidden_size))
-            cfg_seq[:] = x_emb
-            out = self.transformer(
-                packed_query_sequence=cfg_seq,
-                query_lens=torch.tensor([seq_len], dtype=torch.int, device=x_emb.device),
-                packed_query_position_ids=pos_ids,
-                packed_query_indexes=query_idx,
-                past_key_values=past_kv,
-                key_values_lens=kv_lens,
-                packed_key_value_indexes=kv_idx,
-                update_past_key_values=False,
-                is_causal=False,
-            )
-            return self.llm2vae(out.packed_query_sequence)
-
-        if cfg_type == "parallel":
-            if need_text_cfg:
-                v_t_text = _cfg_forward(
-                    cfg_text_past_key_values,
-                    cfg_text_packed_position_ids, cfg_text_packed_query_indexes,
-                    cfg_text_key_values_lens, cfg_text_packed_key_value_indexes,
-                )
-            if need_img_cfg:
-                v_t_img = _cfg_forward(
-                    cfg_img_past_key_values,
-                    cfg_img_packed_position_ids, cfg_img_packed_query_indexes,
-                    cfg_img_key_values_lens, cfg_img_packed_key_value_indexes,
-                )
-
-            # Combine: v = v_text_cfg + v_img_cfg - v_uncond (implicit)
-            v_t_ = v_t.clone()
-            if need_text_cfg:
-                v_t_ = v_t_ + cfg_text_scale * (v_t - v_t_text)
-            if need_img_cfg:
-                v_t_ = v_t_ + cfg_img_scale * (v_t - v_t_img)
-
-            # Optional renormalization
-            if cfg_renorm_min > 0:
-                if cfg_renorm_type == "global":
-                    norm_v_t = torch.norm(v_t)
-                    norm_v_t_ = torch.norm(v_t_)
-                elif cfg_renorm_type == "channel":
-                    norm_v_t = torch.norm(v_t, dim=-1, keepdim=True)
-                    norm_v_t_ = torch.norm(v_t_, dim=-1, keepdim=True)
-                else:
-                    raise NotImplementedError(f"{cfg_renorm_type} is not supported")
-                scale = (norm_v_t / (norm_v_t_ + 1e-8)).clamp(min=cfg_renorm_min, max=1.0)
-                v_t = v_t_ * scale
-            else:
-                v_t = v_t_
-
-        return v_t
-
-    # ════════════════════════════════════════════════════════════════
-    # from_pretrained (Flat Loading — No Bagel Wrapper)
-    # ════════════════════════════════════════════════════════════════
-
-    @classmethod
-    def from_pretrained(
-        cls,
-        model_path: str,
-        vae_path: Optional[str] = None,
-        low_cpu_mem_usage: bool = False,
-        **kwargs,
-    ) -> "BagelPseudoPipeline":
-        """
-        Load and construct all components individually (no Bagel wrapper).
-
-        Weights are loaded from ``ema.safetensors`` and remapped from
-        the original ``language_model.*`` / ``vit_model.*`` prefixes to
-        the flat ``transformer.*`` / ``vit.*`` layout.
-        """
-        from .modeling.bagel import (
-            BagelConfig,
-            Qwen2Config, Qwen2ForCausalLM,
-            SiglipVisionConfig, SiglipVisionModel,
-        )
-        from .modeling.bagel.modeling_utils import MLPconnector, TimestepEmbedder, PositionEmbedding
-        from .modeling.autoencoder import load_ae
-        from safetensors.torch import load_file
-
-        # ── Resolve to local directory ──
-        model_path = _resolve_model_path(model_path, **kwargs)
-
-        # ── LLM Config ──
-        llm_config = Qwen2Config.from_json_file(
-            os.path.join(model_path, "llm_config.json")
-        )
-        llm_config.qk_norm = True
-        llm_config.tie_word_embeddings = False
-        llm_config.layer_module = kwargs.get("layer_module", "Qwen2MoTDecoderLayer")
-
-        # ── ViT Config ──
-        vit_config = SiglipVisionConfig.from_json_file(
-            os.path.join(model_path, "vit_config.json")
-        )
-        vit_config.rope = kwargs.get("vit_rope", False)
-        vit_config.num_hidden_layers = vit_config.num_hidden_layers - 1
-
-        # ── VAE ──
-        ae_path = vae_path or os.path.join(model_path, "ae.safetensors")
-        vae_model, vae_config = load_ae(local_path=ae_path)
-
-        # ── Bagel Config ──
-        config = BagelConfig(
-            visual_gen=True,
-            visual_und=True,
-            llm_config=llm_config,
-            vit_config=vit_config,
-            vae_config=vae_config,
-            vit_max_num_patch_per_side=kwargs.get("vit_max_num_patch_per_side", 70),
-            connector_act=kwargs.get("connector_act", "gelu_pytorch_tanh"),
-            latent_patch_size=kwargs.get("latent_patch_size", 2),
-            max_latent_size=kwargs.get("max_latent_size", 64),
-        )
-
-        # ── Derived dims ──
-        hidden_size = llm_config.hidden_size
-        vit_hidden_size = vit_config.hidden_size
-        patch_latent_dim = config.latent_patch_size ** 2 * vae_config.z_channels
-
-        # ── Build components independently ──
-        if low_cpu_mem_usage:
-            from accelerate import init_empty_weights
-            ctx = init_empty_weights()
-        else:
-            from contextlib import nullcontext
-            ctx = nullcontext()
-
-        with ctx:
-            transformer = Qwen2ForCausalLM(llm_config)
-            vit = SiglipVisionModel(vit_config)
-            vae2llm = nn.Linear(patch_latent_dim, hidden_size)
-            llm2vae = nn.Linear(hidden_size, patch_latent_dim)
-            time_embedder = TimestepEmbedder(hidden_size)
-            latent_pos_embed = PositionEmbedding(config.max_latent_size, hidden_size)
-            connector = MLPconnector(vit_hidden_size, hidden_size, config.connector_act)
-            vit_pos_embed = PositionEmbedding(config.vit_max_num_patch_per_side, hidden_size)
-
-        # Convert ViT conv2d → linear
-        vit.vision_model.embeddings.convert_conv2d_to_linear(
-            vit_config, meta=low_cpu_mem_usage
-        )
-
-        # ── Load & remap weights ──
-        if not low_cpu_mem_usage:
-            ema_path = os.path.join(model_path, "ema.safetensors")
-            if os.path.exists(ema_path):
-                raw_sd = load_file(ema_path)
-                flat_sd = _remap_state_dict(raw_sd)
-
-                # Load into each component by prefix
-                component_map = {
-                    "transformer.": transformer,
-                    "vit.": vit,
-                    "vae2llm.": vae2llm,
-                    "llm2vae.": llm2vae,
-                    "time_embedder.": time_embedder,
-                    "latent_pos_embed.": latent_pos_embed,
-                    "connector.": connector,
-                    "vit_pos_embed.": vit_pos_embed,
-                }
-                for prefix, module in component_map.items():
-                    sub_sd = {
-                        k[len(prefix):]: v
-                        for k, v in flat_sd.items()
-                        if k.startswith(prefix)
-                    }
-                    if sub_sd:
-                        module.load_state_dict(sub_sd, strict=False)
-
-        return cls(
-            config=config,
-            transformer=transformer,
-            vit=vit,
-            vae=vae_model,
-            vae2llm=vae2llm,
-            llm2vae=llm2vae,
-            time_embedder=time_embedder,
-            latent_pos_embed=latent_pos_embed,
-            connector=connector,
-            vit_pos_embed=vit_pos_embed,
-        )
