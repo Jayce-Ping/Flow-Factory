@@ -451,16 +451,15 @@ class BagelPseudoPipeline:
         return generation_input, newlens, new_rope_out
 
     def prepare_vae_images(self, curr_kvlens, curr_rope, images, transforms, new_token_ids, timestep=0):
-        """Prepare VAE-encoded image tokens for KV-cache update."""
-        patchified_vae_latent_shapes, packed_vae_position_ids = [], []
-        packed_vae_token_indexes = []
-        packed_text_ids, packed_text_indexes = [], []
-        packed_seqlens, packed_position_ids, packed_indexes = [], [], []
-        packed_key_value_indexes = []
+        patchified_vae_latent_shapes, packed_vae_position_ids = list(), list()
+        packed_vae_token_indexes = list()
+        packed_text_ids, packed_text_indexes = list(), list()
+        packed_seqlens, packed_position_ids, packed_indexes = list(), list(), list()
+        packed_key_value_indexes = list()
 
         _curr = curr = 0
-        vae_image_tensors = []
-        newlens, new_rope_out = [], []
+        vae_image_tensors = list()
+        newlens, new_rope = list(), list()
         for image, curr_kvlen, curr_position_id in zip(images, curr_kvlens, curr_rope):
             packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
             curr += curr_kvlen
@@ -473,19 +472,22 @@ class BagelPseudoPipeline:
 
             image_tensor = transforms(image) if not isinstance(image, torch.Tensor) else image
             vae_image_tensors.append(image_tensor)
-            h, w = image_tensor.shape[1] // (self.latent_downsample), image_tensor.shape[2] // (self.latent_downsample)
+            vae_posiiton_ids = self.get_flattened_position_ids(
+                image_tensor.size(1), image_tensor.size(2),
+                self.latent_downsample, 
+                max_num_patches_per_side=self.max_latent_size
+            )
+            packed_vae_position_ids.append(vae_posiiton_ids)
+            H, W = image_tensor.shape[1:]
+            h = H // self.latent_downsample
+            w = W // self.latent_downsample
             patchified_vae_latent_shapes.append((h, w))
 
-            vae_position_ids = self.get_flattened_position_ids(
-                h, w, patch_size=1,
-                max_num_patches_per_side=self.max_latent_size,
-            )
-            packed_vae_position_ids.append(vae_position_ids)
-            num_vae_tokens = h * w
-            packed_vae_token_indexes.extend(range(_curr, _curr + num_vae_tokens))
-            packed_indexes.extend(range(curr, curr + num_vae_tokens))
-            curr += num_vae_tokens
-            _curr += num_vae_tokens
+            num_img_tokens = w * h
+            packed_vae_token_indexes.extend(range(_curr, _curr + num_img_tokens))
+            packed_indexes.extend(range(curr, curr + num_img_tokens))
+            curr += num_img_tokens
+            _curr += num_img_tokens
 
             packed_text_ids.append(new_token_ids['end_of_image'])
             packed_text_indexes.append(_curr)
@@ -493,28 +495,22 @@ class BagelPseudoPipeline:
             curr += 1
             _curr += 1
 
-            packed_position_ids.extend([curr_position_id] * (num_vae_tokens + 2))
-            packed_seqlens.append(num_vae_tokens + 2)
-            newlens.append(curr_kvlen + num_vae_tokens + 2)
-            new_rope_out.append(curr_position_id + 1)
+            packed_position_ids.extend([curr_position_id] * (num_img_tokens + 2))
+            packed_seqlens.append(num_img_tokens + 2)
+            newlens.append(curr_kvlen + num_img_tokens + 2)
+            new_rope.append(curr_position_id + 1)
 
-        # Pad & stack VAE images
-        max_h = max(t.shape[1] for t in vae_image_tensors)
-        max_w = max(t.shape[2] for t in vae_image_tensors)
-        padded = []
-        for t in vae_image_tensors:
-            pad_h = max_h - t.shape[1]
-            pad_w = max_w - t.shape[2]
-            if pad_h > 0 or pad_w > 0:
-                t = torch.nn.functional.pad(t, (0, pad_w, 0, pad_h))
-            padded.append(t)
-        padded_images = torch.stack(padded)
+        image_sizes = [item.shape for item in vae_image_tensors]
+        max_image_size = [max(item) for item in list(zip(*image_sizes))]
+        padded_images = torch.zeros(size=(len(vae_image_tensors), *max_image_size))
+        for i, image_tensor in enumerate(vae_image_tensors):
+            padded_images[i, :, :image_tensor.shape[1], :image_tensor.shape[2]] = image_tensor
 
         generation_input = {
             "padded_images": padded_images,
             "patchified_vae_latent_shapes": patchified_vae_latent_shapes,
             "packed_vae_position_ids": torch.cat(packed_vae_position_ids, dim=0),
-            "packed_timesteps": torch.tensor([timestep] * sum(h * w for h, w in patchified_vae_latent_shapes)),
+            "packed_timesteps": torch.tensor([timestep]),
             "packed_vae_token_indexes": torch.tensor(packed_vae_token_indexes, dtype=torch.long),
             "packed_text_ids": torch.tensor(packed_text_ids, dtype=torch.long),
             "packed_text_indexes": torch.tensor(packed_text_indexes, dtype=torch.long),
@@ -524,7 +520,8 @@ class BagelPseudoPipeline:
             "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
             "key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
         }
-        return generation_input, newlens, new_rope_out
+
+        return generation_input, newlens, new_rope
 
     def prepare_vae_latent(self, curr_kvlens, curr_rope, image_sizes, new_token_ids, device=None):
         """Prepare packed latent generation inputs for denoising."""
