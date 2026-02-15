@@ -1028,6 +1028,13 @@ class BagelAdapter(BaseAdapter):
                 cfg_text_generation_input=cfg_text_gen_input,
                 cfg_img_generation_input=cfg_img_gen_input,
                 image_shape=image_shape,
+                # Conditioning images (for i2i)
+                **(
+                    {"condition_images": cur_cond_images}
+                    if is_i2i and hasattr(SampleCls, "condition_images")
+                    else {}
+                ),
+                # Extra callback results
                 extra_kwargs={
                     **result.get("callback_results", {}),
                     "callback_index_map": result.get("callback_index_map"),
