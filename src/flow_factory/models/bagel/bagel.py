@@ -239,6 +239,19 @@ class BagelAdapter(BaseAdapter):
         """The BagelConfig from the loaded model."""
         return self.pipeline.config
 
+    # ======================== Attention Backend Management ========================
+    def _set_attention_backend(self) -> None:
+        backend = self.model_args.attn_backend
+        if backend is None:
+            return
+
+        # Bagel varlen attention dispatch
+        try:
+            from .modeling.bagel.attention_dispatch import set_attn_backend
+            set_attn_backend(backend)
+        except ImportError:
+            pass
+
     # ======================== Mode Management ========================
 
     # @property

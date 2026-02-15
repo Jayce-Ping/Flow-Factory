@@ -20,17 +20,7 @@ from ..siglip.modeling_siglip import SiglipAttention, SiglipPreTrainedModel
 
 logger = logging.getLogger(__name__)
 
-# ── Optional flash-attn ─────────────────────────────────────────────────────
-try:
-    from flash_attn import flash_attn_varlen_func
-    FLASH_ATTN_AVAILABLE = True
-except ImportError:
-    FLASH_ATTN_AVAILABLE = False
-    logger.info(
-        "flash_attn not installed — falling back to "
-        "torch.nn.functional.scaled_dot_product_attention."
-    )
-
+from .attention_dispatch import varlen_attention
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -276,23 +266,14 @@ class SiglipFlashAttention2(SiglipAttention):
             query_states = torch.cat([qh, qw], dim=-1)
             key_states = torch.cat([kh, kw], dim=-1)
 
-        if FLASH_ATTN_AVAILABLE:
-            attn_output = flash_attn_varlen_func(
-                query_states.to(torch.bfloat16),
-                key_states.to(torch.bfloat16),
-                value_states.to(torch.bfloat16),
-                cu_seqlens_q=cu_seqlens,
-                cu_seqlens_k=cu_seqlens,
-                max_seqlen_q=max_seqlen,
-                max_seqlen_k=max_seqlen,
-                causal=False,
-            )
-        else:
-            attn_output = _sdpa_varlen(
-                query_states, key_states, value_states,
-                cu_seqlens=cu_seqlens,
-                max_seqlen=max_seqlen,
-            )
+        attn_output = varlen_attention(
+            query_states, key_states, value_states,
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_k=cu_seqlens,
+            max_seqlen_q=max_seqlen,
+            max_seqlen_k=max_seqlen,
+            causal=False,
+        )
 
         attn_output = self.out_proj(attn_output.reshape(total_q_len, -1))
         return attn_output
