@@ -289,10 +289,25 @@ class BagelAdapter(BaseAdapter):
         elif is_image_batch(images):
             images = [images]
 
+        condition_image_size = (
+            (condition_image_size, condition_image_size)
+            if isinstance(condition_image_size, int)
+            else condition_image_size
+        )
+        max_area = condition_image_size[0] * condition_image_size[1]
+
+        images = [
+            self.standardize_images(batch, output_type='pil') for batch in images
+        ]
+
         condition_images = []
         for batch in images:
             batch_tensors = []
             for img in batch:
+                w, h = img.size
+                if w * h > max_area:
+                    new_w, new_h = calculate_dimensions(max_area, h / w)
+                    img = img.resize((new_w, new_h), resample=Image.BICUBIC)
                 t = pil_image_to_tensor(img).to(device)
                 batch_tensors.append(t)
             condition_images.append(batch_tensors)
