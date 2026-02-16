@@ -65,7 +65,13 @@ train:
   # Sampling
   resolution: 512  # Can be int or [height, width]
   num_inference_steps: 10  # Number of timesteps
-  guidance_scale: 4.0  # Guidance scale for sampling
+  # Bagel-specific generation params (passed to inference/forward via **training_args)
+  cfg_text_scale: 4.0
+  cfg_img_scale: 1.5
+  cfg_interval: [0.4, 1.0]
+  cfg_renorm_min: 0.0
+  cfg_renorm_type: global
+  timestep_shift: 3.0
 
   # Batch and sampling
   per_device_batch_size: 1  # Batch size per device
@@ -87,14 +93,6 @@ train:
   # Seed
   seed: 42  # Random seed
 
-  # Bagel-specific generation params (passed to inference/forward via **training_args)
-  cfg_text_scale: 4.0
-  cfg_img_scale: 1.5
-  cfg_interval: [0.4, 1.0]
-  cfg_renorm_min: 0.0
-  cfg_renorm_type: global
-  timestep_shift: 3.0
-
 # Scheduler Configuration
 scheduler:
   dynamics_type: "ODE"  # Options: Flow-SDE, Dance-SDE, CPS, ODE
@@ -103,7 +101,6 @@ scheduler:
 eval:
   resolution: 1024  # Evaluation resolution
   per_device_batch_size: 1  # Eval batch size
-  guidance_scale: 4.0  # Guidance scale for sampling
   num_inference_steps: 28  # Number of eval timesteps
   eval_freq: 20  # Eval frequency in epochs (0 to disable)
   seed: 42  # Eval seed (defaults to training seed)
