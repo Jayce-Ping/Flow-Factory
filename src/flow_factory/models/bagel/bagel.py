@@ -791,6 +791,7 @@ class BagelAdapter(BaseAdapter):
                     image_sizes=[_image_shape],
                     new_token_ids=self.new_token_ids,
                     device=device,
+                    generator=kwargs.get("generator", None),
                 )
 
             past_key_values = gen_ctx["past_key_values"]
@@ -907,7 +908,7 @@ class BagelAdapter(BaseAdapter):
         compute_log_prob: bool = True,
         extra_call_back_kwargs: List[str] = [],
         trajectory_indices: TrajectoryIndicesType = "all",
-        generator: Optional[torch.Generator] = None,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         think: bool = False,
     ) -> List[BagelSample]:
         """Full generation: build context → denoise → decode → return samples."""
@@ -948,6 +949,7 @@ class BagelAdapter(BaseAdapter):
                 image_sizes=[image_shape],
                 new_token_ids=self.new_token_ids,
                 device=device,
+                generator=generator,
             )
             cfg_text_gen_input = self.pipeline.prepare_vae_latent_cfg(
                 curr_kvlens=cfg_text_ctx["kv_lens"],
