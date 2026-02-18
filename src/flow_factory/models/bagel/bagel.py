@@ -783,11 +783,7 @@ class BagelAdapter(BaseAdapter):
         return_kwargs: List[str] = [
             "noise_pred", "next_latents", "next_latents_mean",
             "std_dev_t", "dt", "log_prob",
-        ],
-        prompt: Optional[Union[str, List[str]]] = None,
-        condition_images: Optional[List[torch.Tensor]] = None,
-        image_shape: Optional[Tuple[int, int]] = None,
-        **kwargs,
+        ]
     ) -> SDESchedulerOutput:
         """Single denoising step: flow prediction → scheduler step."""
         device = latents.device
