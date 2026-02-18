@@ -795,12 +795,9 @@ class BagelAdapter(BaseAdapter):
             else:
                 # Convert from list of `NaiveCache` to `NaiveCache`
                 return NaiveCache.from_NaiveCache_list(kv)
-        if isinstance(past_key_values, list):
-            past_key_values = convert_naive_cache(past_key_values)
-        if cfg_text_past_kv is not None and isinstance(cfg_text_past_kv, list):
-            cfg_text_past_kv = convert_naive_cache(cfg_text_past_kv)
-        if cfg_img_past_kv is not None and isinstance(cfg_img_past_kv, list):
-            cfg_img_past_kv = convert_naive_cache(cfg_img_past_kv)
+        past_key_values = convert_naive_cache(past_key_values)
+        cfg_text_past_kv = convert_naive_cache(cfg_text_past_kv) if cfg_text_past_kv is not None else None
+        cfg_img_past_kv = convert_naive_cache(cfg_img_past_kv) if cfg_img_past_kv is not None else None
 
         # 2. Convert [0, 1000] → [0, 1] sigma for Bagel
         sigma = t.float() / 1000.0
