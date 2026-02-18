@@ -82,7 +82,11 @@ class BagelSample(T2ISample):
     """Sample for Bagel T2I: trajectory + packed tensor info for KV-cache."""
 
     _shared_fields: ClassVar[frozenset[str]] = frozenset({"image_shape"})
-
+    # Past KV-cache info
+    past_key_values : Optional[NaiveCache] = None
+    cfg_text_past_kv: Optional[NaiveCache] = None
+    cfg_img_past_kv: Optional[NaiveCache] = None
+    # Context info
     packed_text_ids: Optional[torch.LongTensor] = None
     packed_text_indexes: Optional[torch.LongTensor] = None
     packed_vae_position_ids: Optional[torch.LongTensor] = None
@@ -102,7 +106,11 @@ class BagelI2ISample(I2ISample):
     """Sample for Bagel I2I: trajectory + packed tensor info for KV-cache."""
 
     _shared_fields: ClassVar[frozenset[str]] = frozenset({"image_shape"})
-
+    # Past KV-cache info
+    past_key_values : Optional[NaiveCache] = None
+    cfg_text_past_kv: Optional[NaiveCache] = None
+    cfg_img_past_kv: Optional[NaiveCache] = None
+    # Context info
     packed_text_ids: Optional[torch.LongTensor] = None
     packed_text_indexes: Optional[torch.LongTensor] = None
     packed_vae_position_ids: Optional[torch.LongTensor] = None
@@ -627,9 +635,9 @@ class BagelAdapter(BaseAdapter):
     def _denoise_loop(
         self,
         gen_input: Dict[str, torch.Tensor],
-        past_key_values,
-        cfg_text_past_kv,
-        cfg_img_past_kv,
+        past_key_values: NaiveCache,
+        cfg_text_past_kv: NaiveCache,
+        cfg_img_past_kv: NaiveCache,
         cfg_text_generation_input: Dict[str, torch.Tensor],
         cfg_img_generation_input: Dict[str, torch.Tensor],
         image_shape: Tuple[int, int],
@@ -746,6 +754,11 @@ class BagelAdapter(BaseAdapter):
         self,
         t: torch.Tensor,
         latents: torch.Tensor,
+        # KV-cache contexts
+        past_key_values: NaiveCache,
+        cfg_text_past_kv: Optional[NaiveCache] = None,
+        cfg_img_past_kv: Optional[NaiveCache] = None,
+        # Context info
         packed_text_ids: Optional[torch.Tensor] = None,
         packed_text_indexes: Optional[torch.Tensor] = None,
         packed_vae_position_ids: Optional[torch.Tensor] = None,
@@ -755,9 +768,7 @@ class BagelAdapter(BaseAdapter):
         packed_indexes: Optional[torch.Tensor] = None,
         packed_key_value_indexes: Optional[torch.Tensor] = None,
         key_values_lens: Optional[torch.Tensor] = None,
-        past_key_values=None,
-        cfg_text_past_kv=None,
-        cfg_img_past_kv=None,
+        # CFG parameters
         cfg_text_generation_input: Optional[Dict[str, torch.Tensor]] = None,
         cfg_img_generation_input: Optional[Dict[str, torch.Tensor]] = None,
         cfg_text_scale: float = 4.0,
@@ -781,67 +792,11 @@ class BagelAdapter(BaseAdapter):
         """Single denoising step: flow prediction → scheduler step."""
         device = latents.device
 
-        # 1. Rebuild KV-cache contexts if not provided (training path)
-        if past_key_values is None:
-            if prompt is None:
-                raise ValueError(
-                    "BagelAdapter.forward() requires either `past_key_values` "
-                    "(inference) or `prompt` (training) to build KV caches."
-                )
-            if isinstance(prompt, str):
-                prompt = [prompt]
-
-            _image_shape = image_shape or (
-                kwargs.get("height", 1024), kwargs.get("width", 1024)
-            )
-
-            with torch.no_grad():
-                gen_ctx, cfg_text_ctx, cfg_img_ctx = self._build_gen_context(
-                    prompt=prompt[0],
-                    condition_images=condition_images,
-                )
-                gen_input = self.pipeline.prepare_vae_latent(
-                    curr_kvlens=gen_ctx["kv_lens"],
-                    curr_rope=gen_ctx["ropes"],
-                    image_sizes=[_image_shape],
-                    new_token_ids=self.new_token_ids,
-                    device=device,
-                    generator=kwargs.get("generator", None),
-                )
-
-            past_key_values = gen_ctx["past_key_values"]
-            cfg_text_past_kv = cfg_text_ctx["past_key_values"]
-            cfg_img_past_kv = cfg_img_ctx["past_key_values"]
-
-            packed_text_ids = gen_input["packed_text_ids"]
-            packed_text_indexes = gen_input["packed_text_indexes"]
-            packed_vae_position_ids = gen_input["packed_vae_position_ids"]
-            packed_vae_token_indexes = gen_input["packed_vae_token_indexes"]
-            packed_seqlens = gen_input["packed_seqlens"]
-            packed_position_ids = gen_input["packed_position_ids"]
-            packed_indexes = gen_input["packed_indexes"]
-            packed_key_value_indexes = gen_input["packed_key_value_indexes"]
-            key_values_lens = gen_input["key_values_lens"]
-
-            with torch.no_grad():
-                cfg_text_generation_input = self.pipeline.prepare_vae_latent_cfg(
-                    curr_kvlens=cfg_text_ctx["kv_lens"],
-                    curr_rope=cfg_text_ctx["ropes"],
-                    image_sizes=[_image_shape],
-                    device=device,
-                )
-                cfg_img_generation_input = self.pipeline.prepare_vae_latent_cfg(
-                    curr_kvlens=cfg_img_ctx["kv_lens"],
-                    curr_rope=cfg_img_ctx["ropes"],
-                    image_sizes=[_image_shape],
-                    device=device,
-                )
-
-        # 2. Convert [0, 1000] → [0, 1] sigma for Bagel
+        # 1. Convert [0, 1000] → [0, 1] sigma for Bagel
         sigma = t.float() / 1000.0
         timestep_for_bagel = sigma.expand(latents.shape[0])
 
-        # 3. CFG gating
+        # 2. CFG gating
         sigma_val = sigma.flatten()[0].item()
         if sigma_val > cfg_interval[0] and sigma_val <= cfg_interval[1]:
             cfg_text_s = cfg_text_scale
@@ -1021,6 +976,11 @@ class BagelAdapter(BaseAdapter):
                 width=width,
                 # Prompt
                 prompt=cur_prompt,
+                # Past KV Cache
+                past_key_values=gen_ctx["past_key_values"],
+                cfg_text_past_kv=cfg_text_ctx["past_key_values"],
+                cfg_img_past_kv=cfg_img_ctx["past_key_values"],
+                # Context info
                 packed_text_ids=gen_input["packed_text_ids"],
                 packed_text_indexes=gen_input["packed_text_indexes"],
                 packed_vae_position_ids=gen_input["packed_vae_position_ids"],
