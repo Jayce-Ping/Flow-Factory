@@ -755,9 +755,9 @@ class BagelAdapter(BaseAdapter):
         t: torch.Tensor,
         latents: torch.Tensor,
         # KV-cache contexts
-        past_key_values: NaiveCache,
-        cfg_text_past_kv: Optional[NaiveCache] = None,
-        cfg_img_past_kv: Optional[NaiveCache] = None,
+        past_key_values: Union[NaiveCache, List[NaiveCache]],
+        cfg_text_past_kv: Optional[Union[NaiveCache, List[NaiveCache]]] = None,
+        cfg_img_past_kv: Optional[Union[NaiveCache, List[NaiveCache]]] = None,
         # Context info
         packed_text_ids: Optional[torch.Tensor] = None,
         packed_text_indexes: Optional[torch.Tensor] = None,
@@ -792,11 +792,25 @@ class BagelAdapter(BaseAdapter):
         """Single denoising step: flow prediction → scheduler step."""
         device = latents.device
 
-        # 1. Convert [0, 1000] → [0, 1] sigma for Bagel
+        # 1. Ensure past_key_values are `NaiveCache`
+        def convert_naive_cache(kv):
+            if isinstance(kv, NaiveCache):
+                return kv
+            else:
+                # Convert from list of tensors to NaiveCache
+                return NaiveCache.from_NaiveCache_list(kv)
+        if isinstance(past_key_values, list):
+            past_key_values = convert_naive_cache(past_key_values)
+        if cfg_text_past_kv is not None and isinstance(cfg_text_past_kv, list):
+            cfg_text_past_kv = convert_naive_cache(cfg_text_past_kv)
+        if cfg_img_past_kv is not None and isinstance(cfg_img_past_kv, list):
+            cfg_img_past_kv = convert_naive_cache(cfg_img_past_kv)
+
+        # 2. Convert [0, 1000] → [0, 1] sigma for Bagel
         sigma = t.float() / 1000.0
         timestep_for_bagel = sigma.expand(latents.shape[0])
 
-        # 2. CFG gating
+        # 3. CFG gating
         sigma_val = sigma.flatten()[0].item()
         if sigma_val > cfg_interval[0] and sigma_val <= cfg_interval[1]:
             cfg_text_s = cfg_text_scale

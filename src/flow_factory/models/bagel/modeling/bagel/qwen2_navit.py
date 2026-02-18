@@ -219,6 +219,22 @@ class NaiveCache:
             return self.key_cache[0].shape[0]
         else:
             return 0
+        
+    @staticmethod
+    def from_NaiveCache_list(naive_cache_list : List['NaiveCache']):
+        new_cache = NaiveCache(num_layers=naive_cache_list[0].num_layers)
+        for cache in naive_cache_list:
+            for k in range(cache.num_layers):                
+                if new_cache.key_cache[k] is None:
+                    new_cache.key_cache[k] = []
+                    new_cache.value_cache[k] = []
+
+                new_cache.key_cache[k].append(cache.key_cache[k])
+                new_cache.value_cache[k].append(cache.value_cache[k])
+
+        new_cache.key_cache = {k: torch.cat(new_cache.key_cache[k], dim=0) for k in new_cache.key_cache}
+        new_cache.value_cache = {k: torch.cat(new_cache.value_cache[k], dim=0) for k in new_cache.value_cache}
+        return new_cache
 
 
 @dataclass
