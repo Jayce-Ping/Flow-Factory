@@ -797,7 +797,7 @@ class BagelAdapter(BaseAdapter):
             if isinstance(kv, NaiveCache):
                 return kv
             else:
-                # Convert from list of tensors to NaiveCache
+                # Convert from list of `NaiveCache` to `NaiveCache`
                 return NaiveCache.from_NaiveCache_list(kv)
         if isinstance(past_key_values, list):
             past_key_values = convert_naive_cache(past_key_values)
