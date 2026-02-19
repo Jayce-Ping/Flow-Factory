@@ -86,16 +86,8 @@ class BagelSample(T2ISample):
     past_key_values : Optional[NaiveCache] = None
     cfg_text_past_kv: Optional[NaiveCache] = None
     cfg_img_past_kv: Optional[NaiveCache] = None
-    # Context info
-    packed_text_ids: Optional[torch.LongTensor] = None
-    packed_text_indexes: Optional[torch.LongTensor] = None
-    packed_vae_position_ids: Optional[torch.LongTensor] = None
-    packed_vae_token_indexes: Optional[torch.LongTensor] = None
-    packed_seqlens: Optional[torch.IntTensor] = None
-    packed_position_ids: Optional[torch.LongTensor] = None
-    packed_indexes: Optional[torch.LongTensor] = None
-    packed_key_value_indexes: Optional[torch.LongTensor] = None
-    key_values_lens: Optional[torch.IntTensor] = None
+    # Generation context info
+    generation_input: Optional[Dict[str, torch.Tensor]] = None
     cfg_text_generation_input: Optional[Dict[str, torch.Tensor]] = None
     cfg_img_generation_input: Optional[Dict[str, torch.Tensor]] = None
     image_shape: Optional[Tuple[int, int]] = None
@@ -110,16 +102,8 @@ class BagelI2ISample(I2ISample):
     past_key_values : Optional[NaiveCache] = None
     cfg_text_past_kv: Optional[NaiveCache] = None
     cfg_img_past_kv: Optional[NaiveCache] = None
-    # Context info
-    packed_text_ids: Optional[torch.LongTensor] = None
-    packed_text_indexes: Optional[torch.LongTensor] = None
-    packed_vae_position_ids: Optional[torch.LongTensor] = None
-    packed_vae_token_indexes: Optional[torch.LongTensor] = None
-    packed_seqlens: Optional[torch.IntTensor] = None
-    packed_position_ids: Optional[torch.LongTensor] = None
-    packed_indexes: Optional[torch.LongTensor] = None
-    packed_key_value_indexes: Optional[torch.LongTensor] = None
-    key_values_lens: Optional[torch.IntTensor] = None
+    # Generation context info
+    generation_input: Optional[Dict[str, torch.Tensor]] = None
     cfg_text_generation_input: Optional[Dict[str, torch.Tensor]] = None
     cfg_img_generation_input: Optional[Dict[str, torch.Tensor]] = None
     image_shape: Optional[Tuple[int, int]] = None
@@ -482,6 +466,7 @@ class BagelAdapter(BaseAdapter):
         self,
         x_t: torch.Tensor,
         timestep: torch.Tensor,
+        # Generation context inputs
         packed_vae_token_indexes: torch.Tensor,
         packed_vae_position_ids: torch.Tensor,
         packed_text_ids: torch.Tensor,
@@ -634,12 +619,12 @@ class BagelAdapter(BaseAdapter):
 
     def _denoise_loop(
         self,
-        gen_input: Dict[str, torch.Tensor],
+        generation_input: Dict[str, torch.Tensor],
+        cfg_text_generation_input: Dict[str, torch.Tensor],
+        cfg_img_generation_input: Dict[str, torch.Tensor],
         past_key_values: NaiveCache,
         cfg_text_past_kv: NaiveCache,
         cfg_img_past_kv: NaiveCache,
-        cfg_text_generation_input: Dict[str, torch.Tensor],
-        cfg_img_generation_input: Dict[str, torch.Tensor],
         image_shape: Tuple[int, int],
         num_inference_steps: int,
         timestep_shift: float,
@@ -665,10 +650,10 @@ class BagelAdapter(BaseAdapter):
         timesteps = self.scheduler.timesteps
 
         # 2. Initial noise
-        x_t = gen_input["packed_init_noises"].to(device)
-        gen_input = {
+        x_t = generation_input["packed_init_noises"].to(device)
+        generation_input = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in gen_input.items()
+            for k, v in generation_input.items()
         }
 
         # 3. Collectors
@@ -698,15 +683,7 @@ class BagelAdapter(BaseAdapter):
                 past_key_values=past_key_values,
                 cfg_text_past_kv=cfg_text_past_kv,
                 cfg_img_past_kv=cfg_img_past_kv,
-                packed_text_ids=gen_input["packed_text_ids"],
-                packed_text_indexes=gen_input["packed_text_indexes"],
-                packed_vae_position_ids=gen_input["packed_vae_position_ids"],
-                packed_vae_token_indexes=gen_input["packed_vae_token_indexes"],
-                packed_seqlens=gen_input["packed_seqlens"],
-                packed_position_ids=gen_input["packed_position_ids"],
-                packed_indexes=gen_input["packed_indexes"],
-                packed_key_value_indexes=gen_input["packed_key_value_indexes"],
-                key_values_lens=gen_input["key_values_lens"],
+                generation_input=generation_input,
                 cfg_text_generation_input=cfg_text_generation_input,
                 cfg_img_generation_input=cfg_img_generation_input,
                 cfg_text_scale=cfg_text_scale,
@@ -754,23 +731,15 @@ class BagelAdapter(BaseAdapter):
         self,
         t: torch.Tensor,
         latents: torch.Tensor,
+        # Generation Input
+        generation_input: Dict[str, torch.Tensor],
+        cfg_text_generation_input: Optional[Dict[str, torch.Tensor]] = None,
+        cfg_img_generation_input: Optional[Dict[str, torch.Tensor]] = None,
         # KV-cache contexts
         past_key_values: Union[NaiveCache, List[NaiveCache]],
         cfg_text_past_kv: Optional[Union[NaiveCache, List[NaiveCache]]] = None,
         cfg_img_past_kv: Optional[Union[NaiveCache, List[NaiveCache]]] = None,
-        # Context info
-        packed_text_ids: Optional[torch.Tensor] = None,
-        packed_text_indexes: Optional[torch.Tensor] = None,
-        packed_vae_position_ids: Optional[torch.Tensor] = None,
-        packed_vae_token_indexes: Optional[torch.Tensor] = None,
-        packed_seqlens: Optional[torch.Tensor] = None,
-        packed_position_ids: Optional[torch.Tensor] = None,
-        packed_indexes: Optional[torch.Tensor] = None,
-        packed_key_value_indexes: Optional[torch.Tensor] = None,
-        key_values_lens: Optional[torch.Tensor] = None,
         # CFG parameters
-        cfg_text_generation_input: Optional[Dict[str, torch.Tensor]] = None,
-        cfg_img_generation_input: Optional[Dict[str, torch.Tensor]] = None,
         cfg_text_scale: float = 4.0,
         cfg_img_scale: float = 1.5,
         cfg_interval: Tuple[float, float] = (0.4, 1.0),
@@ -799,11 +768,24 @@ class BagelAdapter(BaseAdapter):
         cfg_text_past_kv = convert_naive_cache(cfg_text_past_kv) if cfg_text_past_kv is not None else None
         cfg_img_past_kv = convert_naive_cache(cfg_img_past_kv) if cfg_img_past_kv is not None else None
 
-        # 2. Convert [0, 1000] → [0, 1] sigma for Bagel
+
+        # 2. Remove batch dimension from generation inputs and move to device
+        def remove_batch_dim(tensor: torch.Tensor) -> torch.Tensor:
+            if tensor is None:
+                return None
+            if not tensor.shape[0] == 1:
+                raise ValueError(f"Bagel does not support batch dimension > 1 for generation inputs, but got shape {tensor.shape}")
+            return tensor.squeeze(0)
+        
+        generation_input = {k: remove_batch_dim(v) if isinstance(v, torch.Tensor) else v for k, v in generation_input.items()}
+        cfg_text_generation_input = {k: remove_batch_dim(v) if isinstance(v, torch.Tensor) else v for k, v in (cfg_text_generation_input or {}).items()}
+        cfg_img_generation_input = {k: remove_batch_dim(v) if isinstance(v, torch.Tensor) else v for k, v in (cfg_img_generation_input or {}).items()}
+
+        # 3. Convert [0, 1000] → [0, 1] sigma for Bagel
         sigma = t.float() / 1000.0
         timestep_for_bagel = sigma.expand(latents.shape[0])
 
-        # 3. CFG gating
+        # 4. CFG gating
         sigma_val = sigma.flatten()[0].item()
         if sigma_val > cfg_interval[0] and sigma_val <= cfg_interval[1]:
             cfg_text_s = cfg_text_scale
@@ -818,20 +800,30 @@ class BagelAdapter(BaseAdapter):
             v = d.get(key)
             return v.to(device) if isinstance(v, torch.Tensor) else None
 
-        # 4. Flow velocity prediction (gradient-safe)
+        packed_text_ids : torch.Tensor = generation_input["packed_text_ids"].to(device)
+        packed_text_indexes: torch.Tensor = generation_input["packed_text_indexes"].to(device)
+        packed_vae_position_ids: torch.Tensor = generation_input["packed_vae_position_ids"].to(device)
+        packed_vae_token_indexes: torch.Tensor = generation_input["packed_vae_token_indexes"].to(device)
+        packed_seqlens: torch.Tensor = generation_input["packed_seqlens"].to(device)
+        packed_position_ids: torch.Tensor = generation_input["packed_position_ids"].to(device)
+        packed_indexes: torch.Tensor = generation_input["packed_indexes"].to(device)
+        packed_key_value_indexes: torch.Tensor = generation_input["packed_key_value_indexes"].to(device)
+        key_values_lens: torch.Tensor = generation_input["key_values_lens"].to(device)
+
+        # 5. Flow velocity prediction (gradient-safe)
         noise_pred = self._forward_flow(
             x_t=latents,
             timestep=timestep_for_bagel,
-            packed_vae_token_indexes=packed_vae_token_indexes.to(device),
-            packed_vae_position_ids=packed_vae_position_ids.to(device),
-            packed_text_ids=packed_text_ids.to(device),
-            packed_text_indexes=packed_text_indexes.to(device),
-            packed_position_ids=packed_position_ids.to(device),
-            packed_indexes=packed_indexes.to(device),
-            packed_seqlens=packed_seqlens.to(device),
-            key_values_lens=key_values_lens.to(device),
+            packed_vae_token_indexes=packed_vae_token_indexes,
+            packed_vae_position_ids=packed_vae_position_ids,
+            packed_text_ids=packed_text_ids,
+            packed_text_indexes=packed_text_indexes,
+            packed_position_ids=packed_position_ids,
+            packed_indexes=packed_indexes,
+            packed_seqlens=packed_seqlens,
+            key_values_lens=key_values_lens,
             past_key_values=past_key_values,
-            packed_key_value_indexes=packed_key_value_indexes.to(device),
+            packed_key_value_indexes=packed_key_value_indexes,
             cfg_renorm_min=cfg_renorm_min,
             cfg_renorm_type=cfg_renorm_type,
             cfg_text_scale=cfg_text_s,
@@ -943,12 +935,12 @@ class BagelAdapter(BaseAdapter):
 
             # 3. Denoise
             result = self._denoise_loop(
-                gen_input=gen_input,
+                generation_input=gen_input,
+                cfg_text_generation_input=cfg_text_gen_input,
+                cfg_img_generation_input=cfg_img_gen_input,
                 past_key_values=gen_ctx["past_key_values"],
                 cfg_text_past_kv=cfg_text_ctx["past_key_values"],
                 cfg_img_past_kv=cfg_img_ctx["past_key_values"],
-                cfg_text_generation_input=cfg_text_gen_input,
-                cfg_img_generation_input=cfg_img_gen_input,
                 image_shape=image_shape,
                 num_inference_steps=num_inference_steps,
                 timestep_shift=timestep_shift,
@@ -988,15 +980,7 @@ class BagelAdapter(BaseAdapter):
                 cfg_text_past_kv=cfg_text_ctx["past_key_values"],
                 cfg_img_past_kv=cfg_img_ctx["past_key_values"],
                 # Context info
-                packed_text_ids=gen_input["packed_text_ids"],
-                packed_text_indexes=gen_input["packed_text_indexes"],
-                packed_vae_position_ids=gen_input["packed_vae_position_ids"],
-                packed_vae_token_indexes=gen_input["packed_vae_token_indexes"],
-                packed_seqlens=gen_input["packed_seqlens"],
-                packed_position_ids=gen_input["packed_position_ids"],
-                packed_indexes=gen_input["packed_indexes"],
-                packed_key_value_indexes=gen_input["packed_key_value_indexes"],
-                key_values_lens=gen_input["key_values_lens"],
+                generation_input=gen_input,
                 cfg_text_generation_input=cfg_text_gen_input,
                 cfg_img_generation_input=cfg_img_gen_input,
                 image_shape=image_shape,
