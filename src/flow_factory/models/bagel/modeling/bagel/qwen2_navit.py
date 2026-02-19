@@ -232,8 +232,14 @@ class NaiveCache:
                 new_cache.key_cache[k].append(cache.key_cache[k])
                 new_cache.value_cache[k].append(cache.value_cache[k])
 
-        new_cache.key_cache = {k: torch.cat(new_cache.key_cache[k], dim=0) for k in new_cache.key_cache}
-        new_cache.value_cache = {k: torch.cat(new_cache.value_cache[k], dim=0) for k in new_cache.value_cache}
+        new_cache.key_cache = {
+            k: torch.cat(new_cache.key_cache[k], dim=0) if new_cache.key_cache[k] is not None else None
+            for k in new_cache.key_cache
+        }
+        new_cache.value_cache = {
+            k: torch.cat(new_cache.value_cache[k], dim=0) if new_cache.key_cache[k] is not None else None
+            for k in new_cache.value_cache
+        }
         return new_cache
 
 
