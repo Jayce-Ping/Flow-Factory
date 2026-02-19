@@ -733,10 +733,11 @@ class BagelAdapter(BaseAdapter):
         latents: torch.Tensor,
         # Generation Input
         generation_input: Dict[str, torch.Tensor],
+        past_key_values: Union[NaiveCache, List[NaiveCache]],
+        # CFG Generation Input
         cfg_text_generation_input: Optional[Dict[str, torch.Tensor]] = None,
         cfg_img_generation_input: Optional[Dict[str, torch.Tensor]] = None,
-        # KV-cache contexts
-        past_key_values: Union[NaiveCache, List[NaiveCache]],
+        # CFG KV-cache contexts
         cfg_text_past_kv: Optional[Union[NaiveCache, List[NaiveCache]]] = None,
         cfg_img_past_kv: Optional[Union[NaiveCache, List[NaiveCache]]] = None,
         # CFG parameters
@@ -770,16 +771,28 @@ class BagelAdapter(BaseAdapter):
 
 
         # 2. Remove batch dimension from generation inputs and move to device
-        def remove_batch_dim(tensor: torch.Tensor) -> torch.Tensor:
-            if tensor is None:
-                return None
-            if not tensor.shape[0] == 1:
-                raise ValueError(f"Bagel does not support batch dimension > 1 for generation inputs, but got shape {tensor.shape}")
-            return tensor.squeeze(0)
-        
-        generation_input = {k: remove_batch_dim(v) if isinstance(v, torch.Tensor) else v for k, v in generation_input.items()}
-        cfg_text_generation_input = {k: remove_batch_dim(v) if isinstance(v, torch.Tensor) else v for k, v in (cfg_text_generation_input or {}).items()}
-        cfg_img_generation_input = {k: remove_batch_dim(v) if isinstance(v, torch.Tensor) else v for k, v in (cfg_img_generation_input or {}).items()}
+        has_batch_dimension = all(
+            t.shape[0] == 1 for t in (
+                list(generation_input.values())
+                + list((cfg_text_generation_input or {}).values())
+                + list((cfg_img_generation_input or {}).values())
+            )
+        )
+        if has_batch_dimension:
+            generation_input = {
+                k: v.squeeze(0) if isinstance(v, torch.Tensor) else v
+                for k, v in generation_input.items()
+            }
+            if cfg_text_generation_input is not None:
+                cfg_text_generation_input = {
+                    k: v.squeeze(0) if isinstance(v, torch.Tensor) else v
+                    for k, v in cfg_text_generation_input.items()
+                }
+            if cfg_img_generation_input is not None:
+                cfg_img_generation_input = {
+                    k: v.squeeze(0) if isinstance(v, torch.Tensor) else v
+                    for k, v in cfg_img_generation_input.items()
+                }
 
         # 3. Convert [0, 1000] → [0, 1] sigma for Bagel
         sigma = t.float() / 1000.0
