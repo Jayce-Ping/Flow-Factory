@@ -221,24 +221,24 @@ class NaiveCache:
             return 0
         
     @staticmethod
-    def from_NaiveCache_list(naive_cache_list : List['NaiveCache']):
+    def from_NaiveCache_list(naive_cache_list: List['NaiveCache']):
+        """Concatenate a list of NaiveCache instances along the batch (seq) dimension."""
         new_cache = NaiveCache(num_layers=naive_cache_list[0].num_layers)
         for cache in naive_cache_list:
-            for k in range(cache.num_layers):                
+            for k in range(cache.num_layers):
                 if new_cache.key_cache[k] is None:
                     new_cache.key_cache[k] = []
                     new_cache.value_cache[k] = []
-
                 new_cache.key_cache[k].append(cache.key_cache[k])
                 new_cache.value_cache[k].append(cache.value_cache[k])
 
         new_cache.key_cache = {
-            k: torch.cat(new_cache.key_cache[k], dim=0) if new_cache.key_cache[k] is not None else None
-            for k in new_cache.key_cache
+            k: torch.cat(v, dim=0) if v is not None and all(x is not None for x in v) else None
+            for k, v in new_cache.key_cache.items()
         }
         new_cache.value_cache = {
-            k: torch.cat(new_cache.value_cache[k], dim=0) if new_cache.key_cache[k] is not None else None
-            for k in new_cache.value_cache
+            k: torch.cat(v, dim=0) if v is not None and all(x is not None for x in v) else None
+            for k, v in new_cache.value_cache.items()
         }
         return new_cache
 
