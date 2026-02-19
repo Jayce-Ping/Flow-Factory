@@ -771,14 +771,16 @@ class BagelAdapter(BaseAdapter):
 
 
         # 2. Remove batch dimension from generation inputs and move to device
-        has_batch_dimension = all(
-            t.shape[0] == 1 for t in (
+        all_first_dimension = [
+            t.shape[0] for t in (
                 list(generation_input.values())
                 + list((cfg_text_generation_input or {}).values())
                 + list((cfg_img_generation_input or {}).values())
             )
-        )
+        ]
+        has_batch_dimension = all(dim == all_first_dimension[0] for dim in all_first_dimension)
         if has_batch_dimension:
+            assert all(dim == 1 for dim in all_first_dimension), "Expected batch dimension of size 1 for generation inputs"
             generation_input = {
                 k: v.squeeze(0) if isinstance(v, torch.Tensor) else v
                 for k, v in generation_input.items()
