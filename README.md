@@ -96,6 +96,7 @@ pip install -e .
 
 See [`Algorithm Guidance`](guidance/algorithms.md) for more information.
 
+> Model and algorithm are fully decoupled in Flow-Factory, enabling all listed model–algorithm combinations to work out of the box. The configurations under `examples/` have been verified to yield measurable performance gains. For unlisted combinations, find the closest (task, algorithm) config and swap in the desired model or algorithm parameters.
 
 # 💾 Hardward Requirements
 
