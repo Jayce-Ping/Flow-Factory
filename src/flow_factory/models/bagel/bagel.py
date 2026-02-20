@@ -350,7 +350,7 @@ class BagelAdapter(BaseAdapter):
         key_values_lens: torch.Tensor,
     ) -> NaiveCache:
         """Update KV-cache with text tokens via ``self.transformer`` (accelerator-wrapped)."""
-        packed_text_embedding = self.transformer(packed_text_ids, mode='embed')
+        packed_text_embedding = self.transformer(text_ids=packed_text_ids, mode='embed')
         extra = {"mode": "und"} if self.pipeline.use_moe else {}
 
         output = self.transformer(
@@ -383,7 +383,7 @@ class BagelAdapter(BaseAdapter):
         key_values_lens: torch.Tensor,
     ) -> NaiveCache:
         """Update KV-cache with ViT image tokens via ``self.transformer`` (accelerator-wrapped)."""
-        packed_text_embedding = self.transformer(packed_text_ids, mode='embed')
+        packed_text_embedding = self.transformer(text_ids=packed_text_ids, mode='embed')
         hidden_size = self.pipeline.hidden_size
         packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), hidden_size))
         packed_sequence[packed_text_indexes] = packed_text_embedding
@@ -438,7 +438,7 @@ class BagelAdapter(BaseAdapter):
         packed_key_value_indexes: torch.Tensor,
     ) -> NaiveCache:
         """Update KV-cache with VAE-encoded image tokens via ``self.transformer`` (accelerator-wrapped)."""
-        packed_text_embedding = self.transformer(packed_text_ids, mode='embed')
+        packed_text_embedding = self.transformer(text_ids=packed_text_ids, mode='embed')
         hidden_size = self.pipeline.hidden_size
         packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), hidden_size))
         packed_sequence[packed_text_indexes] = packed_text_embedding
@@ -692,7 +692,7 @@ class BagelAdapter(BaseAdapter):
         Flow velocity prediction with CFG.
         """
 
-        packed_text_embedding = self.transformer(packed_text_ids, mode='embed')
+        packed_text_embedding = self.transformer(text_ids=packed_text_ids, mode='embed')
         hidden_size = self.pipeline.config.llm_config.hidden_size
         packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), hidden_size))
         packed_sequence[packed_text_indexes] = packed_text_embedding
