@@ -805,8 +805,15 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel):
 
     def get_decoder(self):
         return self.model
+    
+    def forward(self, *args, **kwargs):
+        mode = kwargs.pop('mode', 'gen')
+        if mode == 'embed':
+            return self.get_input_embeddings(*args, **kwargs)
+        else:
+            return self._forward(*args, **kwargs)
 
-    def forward(
+    def _forward(
         self,
         packed_query_sequence: torch.Tensor,
         query_lens: torch.Tensor,

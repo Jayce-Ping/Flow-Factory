@@ -1,11 +1,9 @@
-# src/flow_factory/models/bagel/pipeline.py
 """
 Bagel Pseudo-Pipeline (Refactored — Flat Component Hierarchy)
 
 Owns all sub-models as direct attributes (no Bagel wrapper class).
-Provides ``prepare_*`` / ``forward_cache_update_*`` methods for
-KV-cache context building and a ``forward_denoise_step`` for single-step
-flow velocity prediction with CFG.
+Provides ``prepare_*`` utility methods for building generation inputs.
+KV-cache context building.
 
 Architecture (flat, diffusers-like)::
 
@@ -20,6 +18,12 @@ Architecture (flat, diffusers-like)::
       ├── .connector          MLPconnector         (ViT → LLM projection)
       ├── .vit_pos_embed      PositionEmbedding    (ViT positions)
       └── .config             BagelConfig
+
+Note:
+    ``_forward_flow`` and ``forward_cache_update_*`` have been moved to
+    ``BagelAdapter`` so that ``self.transformer`` calls go through the
+    accelerator-wrapped module for proper distributed training.
+    Pipeline only contains stateless ``prepare_*`` utilities.
 """
 from __future__ import annotations
 
@@ -66,7 +70,6 @@ def _remap_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
             if key.startswith(old_prefix):
                 new_sd[key.replace(old_prefix, new_prefix, 1)] = val
                 break
-        # Keys that don't match any prefix are skipped (e.g. lm_head)
     return new_sd
 
 
@@ -83,28 +86,27 @@ def _resolve_model_path(model_path: str, **kwargs) -> str:
         "force_download", "resume_download", "local_files_only",
     }
     dl_kwargs = {k: v for k, v in kwargs.items() if k in _SNAPSHOT_KEYS}
+    return snapshot_download(repo_id=model_path, **dl_kwargs)
 
-    local_dir = snapshot_download(repo_id=model_path, **dl_kwargs)
-    return local_dir
 
 # ===========================================================================
 # BagelConfig
-# ==========================================================================
+# ===========================================================================
 
 class BagelConfig(PretrainedConfig):
     def __init__(
         self,
-        llm_config : Qwen2Config,
-        vit_config : SiglipVisionConfig,
-        vae_config : AutoEncoderParams,
-        visual_gen : bool = True,
-        visual_und : bool = True,
-        latent_patch_size : int = 2,
-        max_latent_size : int = 32,
-        vit_max_num_patch_per_side : int = 70,
-        connector_act : str ="gelu_pytorch_tanh",
-        interpolate_pos : bool = False,
-        timestep_shift : float = 1.0,
+        llm_config: Qwen2Config = None,
+        vit_config: SiglipVisionConfig = None,
+        vae_config: AutoEncoderParams = None,
+        visual_gen: bool = True,
+        visual_und: bool = True,
+        latent_patch_size: int = 2,
+        max_latent_size: int = 32,
+        vit_max_num_patch_per_side: int = 70,
+        connector_act: str = "gelu_pytorch_tanh",
+        interpolate_pos: bool = False,
+        timestep_shift: float = 1.0,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -131,23 +133,27 @@ class BagelPseudoPipeline:
 
     All nn.Modules are direct attributes.
     The ``BaseAdapter`` accesses components via ``getattr(self.pipeline, name)``.
+
+    **Important**: This class only contains stateless ``prepare_*`` utilities.
+    All methods that call ``transformer(...)`` (``forward_cache_update_*``,
+    ``_forward_flow``) live in ``BagelAdapter`` where ``self.transformer``
+    resolves to the accelerator-wrapped module for distributed training.
     """
 
     def __init__(
         self,
-        config: BagelConfig,                    # BagelConfig
-        transformer: Qwen2ForCausalLM,        # Qwen2ForCausalLM
-        vit: SiglipVisionModel,                 # SiglipVisionModel
-        vae: AutoEncoder,                 # AutoEncoder
+        config: BagelConfig,
+        transformer: Qwen2ForCausalLM,
+        vit: SiglipVisionModel,
+        vae: AutoEncoder,
         vae2llm: nn.Linear,
         llm2vae: nn.Linear,
-        time_embedder: TimestepEmbedder,       # TimestepEmbedder
-        latent_pos_embed: PositionEmbedding,    # PositionEmbedding
-        connector: MLPconnector,           # MLPconnector
-        vit_pos_embed: PositionEmbedding,       # PositionEmbedding
+        time_embedder: TimestepEmbedder,
+        latent_pos_embed: PositionEmbedding,
+        connector: MLPconnector,
+        vit_pos_embed: PositionEmbedding,
         scheduler: Optional[Any] = None,
     ):
-        # ── Direct ownership — single source of truth ──
         self.transformer = transformer
         self.vit = vit
         self.vae = vae
@@ -160,7 +166,7 @@ class BagelPseudoPipeline:
         self.config = config
         self.scheduler = scheduler
 
-        # ── Derived constants from config ──
+        # ── Derived constants ──
         self.hidden_size = config.llm_config.hidden_size
         self.use_moe = "Mo" in config.llm_config.layer_module
         self.latent_patch_size = config.latent_patch_size
@@ -172,10 +178,8 @@ class BagelPseudoPipeline:
         self.vit_max_num_patch_per_side = config.vit_max_num_patch_per_side
         self.interpolate_pos = getattr(config, "interpolate_pos", False)
 
-        # ── Backward compatibility alias ──
         self._bagel_config = config
 
-        # Choose position-id function
         if self.interpolate_pos:
             from .data.data_utils import get_flattened_position_ids_interpolate
             self.get_flattened_position_ids = get_flattened_position_ids_interpolate
@@ -184,7 +188,7 @@ class BagelPseudoPipeline:
             self.get_flattened_position_ids = get_flattened_position_ids_extrapolate
 
     # ════════════════════════════════════════════════════════════════
-    # from_pretrained (Flat Loading)
+    # from_pretrained
     # ════════════════════════════════════════════════════════════════
 
     @classmethod
@@ -195,13 +199,7 @@ class BagelPseudoPipeline:
         low_cpu_mem_usage: bool = False,
         **kwargs,
     ) -> "BagelPseudoPipeline":
-        """
-        Load and construct all components individually (no Bagel wrapper).
-
-        Weights are loaded from ``ema.safetensors`` and remapped from
-        the original ``language_model.*`` / ``vit_model.*`` prefixes to
-        the flat ``transformer.*`` / ``vit.*`` layout.
-        """
+        """Load and construct all components individually (no Bagel wrapper)."""
         from .modeling.bagel import (
             Qwen2Config, Qwen2ForCausalLM,
             SiglipVisionConfig, SiglipVisionModel,
@@ -210,47 +208,33 @@ class BagelPseudoPipeline:
         from .modeling.autoencoder import load_ae
         from safetensors.torch import load_file
 
-        # ── Resolve to local directory ──
         model_path = _resolve_model_path(model_path, **kwargs)
 
-        # ── LLM Config ──
-        llm_config = Qwen2Config.from_json_file(
-            os.path.join(model_path, "llm_config.json")
-        )
+        llm_config = Qwen2Config.from_json_file(os.path.join(model_path, "llm_config.json"))
         llm_config.qk_norm = True
         llm_config.tie_word_embeddings = False
         llm_config.layer_module = kwargs.get("layer_module", "Qwen2MoTDecoderLayer")
 
-        # ── ViT Config ──
-        vit_config = SiglipVisionConfig.from_json_file(
-            os.path.join(model_path, "vit_config.json")
-        )
+        vit_config = SiglipVisionConfig.from_json_file(os.path.join(model_path, "vit_config.json"))
         vit_config.rope = kwargs.get("vit_rope", False)
         vit_config.num_hidden_layers = vit_config.num_hidden_layers - 1
 
-        # ── VAE ──
         ae_path = vae_path or os.path.join(model_path, "ae.safetensors")
         vae_model, vae_config = load_ae(local_path=ae_path)
 
-        # ── Bagel Config ──
         config = BagelConfig(
-            llm_config=llm_config,
-            vit_config=vit_config,
-            vae_config=vae_config,
-            visual_gen=True,
-            visual_und=True,
+            llm_config=llm_config, vit_config=vit_config, vae_config=vae_config,
+            visual_gen=True, visual_und=True,
             vit_max_num_patch_per_side=kwargs.get("vit_max_num_patch_per_side", 70),
             connector_act=kwargs.get("connector_act", "gelu_pytorch_tanh"),
             latent_patch_size=kwargs.get("latent_patch_size", 2),
             max_latent_size=kwargs.get("max_latent_size", 64),
         )
 
-        # ── Derived dims ──
         hidden_size = llm_config.hidden_size
         vit_hidden_size = vit_config.hidden_size
         patch_latent_dim = config.latent_patch_size ** 2 * vae_config.z_channels
 
-        # ── Build components independently ──
         if low_cpu_mem_usage:
             from accelerate import init_empty_weights
             ctx = init_empty_weights()
@@ -268,19 +252,13 @@ class BagelPseudoPipeline:
             connector = MLPconnector(vit_hidden_size, hidden_size, config.connector_act)
             vit_pos_embed = PositionEmbedding(config.vit_max_num_patch_per_side, hidden_size)
 
-        # Convert ViT conv2d → linear
-        vit.vision_model.embeddings.convert_conv2d_to_linear(
-            vit_config, meta=low_cpu_mem_usage
-        )
+        vit.vision_model.embeddings.convert_conv2d_to_linear(vit_config, meta=low_cpu_mem_usage)
 
-        # ── Load & remap weights ──
         if not low_cpu_mem_usage:
             ema_path = os.path.join(model_path, "ema.safetensors")
             if os.path.exists(ema_path):
                 raw_sd = load_file(ema_path)
                 flat_sd = _remap_state_dict(raw_sd)
-
-                # Load into each component by prefix
                 component_map = {
                     "transformer.": transformer,
                     "vit.": vit,
@@ -293,8 +271,7 @@ class BagelPseudoPipeline:
                 }
                 for prefix, module in component_map.items():
                     sub_sd = {
-                        k[len(prefix):]: v
-                        for k, v in flat_sd.items()
+                        k[len(prefix):]: v for k, v in flat_sd.items()
                         if k.startswith(prefix)
                     }
                     if sub_sd:
@@ -318,29 +295,24 @@ class BagelPseudoPipeline:
     # ════════════════════════════════════════════════════════════════
 
     def named_components(self) -> Dict[str, nn.Module]:
-        """Return all nn.Module components (no aliases, no duplicates)."""
+        """Return all nn.Module components."""
         return {
-            "transformer":      self.transformer,
-            "vit":              self.vit,
-            "vae":              self.vae,
-            "vae2llm":          self.vae2llm,
-            "llm2vae":          self.llm2vae,
-            "time_embedder":    self.time_embedder,
+            "transformer": self.transformer,
+            "vit": self.vit,
+            "vae": self.vae,
+            "vae2llm": self.vae2llm,
+            "llm2vae": self.llm2vae,
+            "time_embedder": self.time_embedder,
             "latent_pos_embed": self.latent_pos_embed,
-            "connector":        self.connector,
-            "vit_pos_embed":    self.vit_pos_embed,
+            "connector": self.connector,
+            "vit_pos_embed": self.vit_pos_embed,
         }
 
-    # ════════════════════════════════════════════════════════════════
-    # DiffusionPipeline-like Interface
-    # ════════════════════════════════════════════════════════════════
-
     def maybe_free_model_hooks(self):
-        """No-op: Bagel doesn't use diffusers model hooks."""
+        pass
 
     @property
     def device(self) -> torch.device:
-        """Infer device from transformer parameters."""
         try:
             return next(self.transformer.parameters()).device
         except StopIteration:
@@ -348,24 +320,22 @@ class BagelPseudoPipeline:
 
     @property
     def dtype(self) -> torch.dtype:
-        """Infer dtype from transformer parameters."""
         try:
             return next(self.transformer.parameters()).dtype
         except StopIteration:
             return torch.bfloat16
 
     def to(self, *args, **kwargs):
-        """Move all components to given device/dtype."""
         for comp in self.named_components().values():
             comp.to(*args, **kwargs)
         return self
 
     # ════════════════════════════════════════════════════════════════
-    # Patchify / Unpatchify Utilities
+    # Patchify / Unpatchify
     # ════════════════════════════════════════════════════════════════
 
     def patchify_latent(self, latent: torch.Tensor, h: int, w: int) -> torch.Tensor:
-        """``(C, H, W) → (h*w, patch_dim)`` using ``latent_patch_size``."""
+        """``(C, H, W) → (h*w, patch_dim)``."""
         p = self.latent_patch_size
         ch = self.latent_channel
         latent = latent[:, :h * p, :w * p].reshape(ch, h, p, w, p)
@@ -382,16 +352,13 @@ class BagelPseudoPipeline:
         )
 
     # ════════════════════════════════════════════════════════════════
-    # Prepare Methods (moved from Bagel class, inference-only)
+    # Prepare Methods (stateless tensor packing)
     # ════════════════════════════════════════════════════════════════
 
     def prepare_prompts(self, curr_kvlens, curr_rope, prompts, tokenizer, new_token_ids):
         """Tokenize prompts and build packed sequence inputs for KV-cache update."""
-        packed_text_ids = []
-        packed_text_position_ids = []
-        text_token_lens = []
-        packed_text_indexes = []
-        packed_key_value_indexes = []
+        packed_text_ids, packed_text_position_ids = [], []
+        text_token_lens, packed_text_indexes, packed_key_value_indexes = [], [], []
 
         curr = 0
         newlens, new_rope_out = [], []
@@ -438,14 +405,12 @@ class BagelPseudoPipeline:
             packed_text_ids.append(new_token_ids['start_of_image'])
             packed_text_indexes.append(_curr)
             packed_indexes.append(curr)
-            curr += 1
-            _curr += 1
+            curr += 1; _curr += 1
 
             image_tensor = transforms(image) if not isinstance(image, torch.Tensor) else image
             vit_position_ids = self.get_flattened_position_ids(
                 image_tensor.size(1), image_tensor.size(2),
-                self.vit_patch_size,
-                max_num_patches_per_side=self.vit_max_num_patch_per_side,
+                self.vit_patch_size, max_num_patches_per_side=self.vit_max_num_patch_per_side,
             )
             vit_tokens = patchify(image_tensor, self.vit_patch_size)
             packed_vit_tokens.append(vit_tokens)
@@ -454,14 +419,12 @@ class BagelPseudoPipeline:
             vit_token_seqlens.append(num_img_tokens)
             packed_vit_token_indexes.extend(range(_curr, _curr + num_img_tokens))
             packed_indexes.extend(range(curr, curr + num_img_tokens))
-            curr += num_img_tokens
-            _curr += num_img_tokens
+            curr += num_img_tokens; _curr += num_img_tokens
 
             packed_text_ids.append(new_token_ids['end_of_image'])
             packed_text_indexes.append(_curr)
             packed_indexes.append(curr)
-            curr += 1
-            _curr += 1
+            curr += 1; _curr += 1
 
             packed_position_ids.extend([curr_position_id] * (num_img_tokens + 2))
             packed_seqlens.append(num_img_tokens + 2)
@@ -484,15 +447,16 @@ class BagelPseudoPipeline:
         return generation_input, newlens, new_rope_out
 
     def prepare_vae_images(self, curr_kvlens, curr_rope, images, transforms, new_token_ids, timestep=0):
-        patchified_vae_latent_shapes, packed_vae_position_ids = list(), list()
-        packed_vae_token_indexes = list()
-        packed_text_ids, packed_text_indexes = list(), list()
-        packed_seqlens, packed_position_ids, packed_indexes = list(), list(), list()
-        packed_key_value_indexes = list()
+        """Prepare VAE image tokens for KV-cache update."""
+        patchified_vae_latent_shapes, packed_vae_position_ids = [], []
+        packed_vae_token_indexes = []
+        packed_text_ids, packed_text_indexes = [], []
+        packed_seqlens, packed_position_ids, packed_indexes = [], [], []
+        packed_key_value_indexes = []
 
         _curr = curr = 0
-        vae_image_tensors = list()
-        newlens, new_rope = list(), list()
+        vae_image_tensors = []
+        newlens, new_rope_out = [], []
         for image, curr_kvlen, curr_position_id in zip(images, curr_kvlens, curr_rope):
             packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
             curr += curr_kvlen
@@ -500,38 +464,33 @@ class BagelPseudoPipeline:
             packed_text_ids.append(new_token_ids['start_of_image'])
             packed_text_indexes.append(_curr)
             packed_indexes.append(curr)
-            curr += 1
-            _curr += 1
+            curr += 1; _curr += 1
 
             image_tensor = transforms(image) if not isinstance(image, torch.Tensor) else image
             vae_image_tensors.append(image_tensor)
-            vae_posiiton_ids = self.get_flattened_position_ids(
+            vae_position_ids = self.get_flattened_position_ids(
                 image_tensor.size(1), image_tensor.size(2),
-                self.latent_downsample, 
-                max_num_patches_per_side=self.max_latent_size
+                self.latent_downsample, max_num_patches_per_side=self.max_latent_size,
             )
-            packed_vae_position_ids.append(vae_posiiton_ids)
+            packed_vae_position_ids.append(vae_position_ids)
             H, W = image_tensor.shape[1:]
-            h = H // self.latent_downsample
-            w = W // self.latent_downsample
+            h, w = H // self.latent_downsample, W // self.latent_downsample
             patchified_vae_latent_shapes.append((h, w))
 
             num_img_tokens = w * h
             packed_vae_token_indexes.extend(range(_curr, _curr + num_img_tokens))
             packed_indexes.extend(range(curr, curr + num_img_tokens))
-            curr += num_img_tokens
-            _curr += num_img_tokens
+            curr += num_img_tokens; _curr += num_img_tokens
 
             packed_text_ids.append(new_token_ids['end_of_image'])
             packed_text_indexes.append(_curr)
             packed_indexes.append(curr)
-            curr += 1
-            _curr += 1
+            curr += 1; _curr += 1
 
             packed_position_ids.extend([curr_position_id] * (num_img_tokens + 2))
             packed_seqlens.append(num_img_tokens + 2)
             newlens.append(curr_kvlen + num_img_tokens + 2)
-            new_rope.append(curr_position_id + 1)
+            new_rope_out.append(curr_position_id + 1)
 
         image_sizes = [item.shape for item in vae_image_tensors]
         max_image_size = [max(item) for item in list(zip(*image_sizes))]
@@ -553,15 +512,15 @@ class BagelPseudoPipeline:
             "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
             "key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
         }
-
-        return generation_input, newlens, new_rope
+        return generation_input, newlens, new_rope_out
 
     def prepare_vae_latent(self, curr_kvlens, curr_rope, image_sizes, new_token_ids, device=None, generator=None):
+        """Prepare initial noise latent for generation."""
         device = device or torch.device("cpu")
-        packed_text_ids, packed_text_indexes = list(), list()
-        packed_vae_position_ids, packed_vae_token_indexes, packed_init_noises = list(), list(), list()
-        packed_position_ids, packed_seqlens, packed_indexes = list(), list(), list()
-        packed_key_value_indexes = list()
+        packed_text_ids, packed_text_indexes = [], []
+        packed_vae_position_ids, packed_vae_token_indexes, packed_init_noises = [], [], []
+        packed_position_ids, packed_seqlens, packed_indexes = [], [], []
+        packed_key_value_indexes = []
 
         if not isinstance(generator, list):
             generator = [generator] * len(image_sizes)
@@ -574,15 +533,12 @@ class BagelPseudoPipeline:
             packed_text_ids.append(new_token_ids['start_of_image'])
             packed_text_indexes.append(query_curr)
             packed_indexes.append(curr)
-            curr += 1
-            query_curr += 1
+            curr += 1; query_curr += 1
 
-            vae_posiiton_ids = self.get_flattened_position_ids(
-                H, W,
-                self.latent_downsample, 
-                max_num_patches_per_side=self.max_latent_size
+            vae_position_ids = self.get_flattened_position_ids(
+                H, W, self.latent_downsample, max_num_patches_per_side=self.max_latent_size,
             )
-            packed_vae_position_ids.append(vae_posiiton_ids)
+            packed_vae_position_ids.append(vae_position_ids)
 
             h, w = H // self.latent_downsample, W // self.latent_downsample
             num_image_tokens = h * w
@@ -591,14 +547,12 @@ class BagelPseudoPipeline:
             )
             packed_vae_token_indexes.extend(range(query_curr, query_curr + num_image_tokens))
             packed_indexes.extend(range(curr, curr + num_image_tokens))
-            curr += num_image_tokens
-            query_curr += num_image_tokens
+            curr += num_image_tokens; query_curr += num_image_tokens
 
             packed_text_ids.append(new_token_ids['end_of_image'])
             packed_text_indexes.append(query_curr)
             packed_indexes.append(curr)
-            curr += 1
-            query_curr += 1
+            curr += 1; query_curr += 1
 
             packed_position_ids.extend([curr_position_id] * (num_image_tokens + 2))
             packed_seqlens.append(num_image_tokens + 2)
@@ -615,14 +569,12 @@ class BagelPseudoPipeline:
             "packed_indexes": torch.tensor(packed_indexes, dtype=torch.long, device=device),
             "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long, device=device),
         }
-
         return generation_input
-    
+
     def prepare_vae_latent_cfg(self, curr_kvlens, curr_rope, image_sizes, device=None):
+        """Prepare CFG latent position/index tensors."""
         device = device or self.device
-        packed_position_ids = []
-        packed_indexes = []
-        packed_key_value_indexes = []
+        packed_position_ids, packed_indexes, packed_key_value_indexes = [], [], []
 
         query_curr = curr = 0
         for (H, W), curr_kvlen, curr_position_id in zip(image_sizes, curr_kvlens, curr_rope):
@@ -632,19 +584,10 @@ class BagelPseudoPipeline:
             h, w = H // self.latent_downsample, W // self.latent_downsample
             num_vae_tokens = h * w
 
-            # start_of_image token
-            packed_indexes.append(curr)
-            curr += 1
+            packed_indexes.append(curr); curr += 1
+            packed_indexes.extend(range(curr, curr + num_vae_tokens)); curr += num_vae_tokens
+            packed_indexes.append(curr); curr += 1
 
-            # VAE tokens
-            packed_indexes.extend(range(curr, curr + num_vae_tokens))
-            curr += num_vae_tokens
-
-            # end_of_image token
-            packed_indexes.append(curr)
-            curr += 1
-
-            # Position IDs for ALL tokens (vae + 2 text markers)
             packed_position_ids.extend([curr_position_id] * (num_vae_tokens + 2))
 
         return {
@@ -653,149 +596,3 @@ class BagelPseudoPipeline:
             "cfg_key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int, device=device),
             "cfg_packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long, device=device),
         }
-
-    # ════════════════════════════════════════════════════════════════
-    # Forward Cache Update Methods
-    # ════════════════════════════════════════════════════════════════
-
-    @torch.no_grad()
-    def forward_cache_update_text(
-        self,
-        past_key_values,
-        packed_text_ids: torch.IntTensor,
-        packed_text_position_ids: torch.LongTensor,
-        text_token_lens: torch.LongTensor,
-        packed_text_indexes: torch.LongTensor,
-        packed_key_value_indexes: torch.LongTensor,
-        key_values_lens: torch.IntTensor,
-    ):
-        """Update KV-cache with text tokens."""
-        packed_text_embedding = self.transformer.model.embed_tokens(packed_text_ids)
-
-        extra = {"mode": "und"} if self.use_moe else {}
-
-        output = self.transformer(
-            packed_query_sequence=packed_text_embedding,
-            query_lens=text_token_lens,
-            packed_query_position_ids=packed_text_position_ids,
-            packed_query_indexes=packed_text_indexes,
-            past_key_values=past_key_values,
-            packed_key_value_indexes=packed_key_value_indexes,
-            key_values_lens=key_values_lens,
-            update_past_key_values=True,
-            is_causal=True,
-            **extra,
-        )
-        return output.past_key_values
-
-    @torch.no_grad()
-    def forward_cache_update_vit(
-        self,
-        past_key_values,
-        packed_text_ids: torch.LongTensor,
-        packed_text_indexes: torch.LongTensor,
-        packed_vit_tokens: torch.Tensor,
-        packed_vit_token_indexes: torch.LongTensor,
-        packed_vit_position_ids: torch.LongTensor,
-        vit_token_seqlens: torch.IntTensor,
-        packed_position_ids: torch.LongTensor,
-        packed_seqlens: torch.IntTensor,
-        packed_indexes: torch.LongTensor,
-        packed_key_value_indexes: torch.LongTensor,
-        key_values_lens: torch.IntTensor,
-    ):
-        """Update KV-cache with ViT image tokens."""
-        packed_text_embedding = self.transformer.model.embed_tokens(packed_text_ids)
-        packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), self.hidden_size))
-        packed_sequence[packed_text_indexes] = packed_text_embedding
-
-        cu_seqlens = torch.nn.functional.pad(torch.cumsum(vit_token_seqlens, dim=0), (1, 0))
-        cu_seqlens = cu_seqlens.to(torch.int32)
-        max_seqlen = torch.max(vit_token_seqlens).item()
-        packed_vit_token_embed = self.vit(
-            packed_pixel_values=packed_vit_tokens,
-            packed_flattened_position_ids=packed_vit_position_ids,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=max_seqlen,
-        )
-        packed_vit_token_embed = self.connector(packed_vit_token_embed)
-        pos_emb = self.vit_pos_embed(packed_vit_position_ids)
-        packed_vit_token_embed = packed_vit_token_embed + pos_emb
-        if packed_vit_token_embed.dtype != packed_sequence.dtype:
-            packed_vit_token_embed = packed_vit_token_embed.to(packed_sequence.dtype)
-        packed_sequence[packed_vit_token_indexes] = packed_vit_token_embed
-
-        extra = {"mode": "und"} if self.use_moe else {}
-
-        output = self.transformer(
-            packed_query_sequence=packed_sequence,
-            query_lens=packed_seqlens,
-            packed_query_position_ids=packed_position_ids,
-            packed_query_indexes=packed_indexes,
-            past_key_values=past_key_values,
-            packed_key_value_indexes=packed_key_value_indexes,
-            key_values_lens=key_values_lens,
-            update_past_key_values=True,
-            is_causal=False,
-            **extra,
-        )
-        return output.past_key_values
-
-    @torch.no_grad()
-    def forward_cache_update_vae(
-        self,
-        past_key_values,
-        padded_images: torch.Tensor,
-        patchified_vae_latent_shapes: List,
-        packed_vae_position_ids: torch.LongTensor,
-        packed_timesteps: torch.Tensor,
-        packed_vae_token_indexes: torch.LongTensor,
-        packed_text_ids: torch.LongTensor,
-        packed_text_indexes: torch.LongTensor,
-        packed_position_ids: torch.LongTensor,
-        packed_seqlens: torch.IntTensor,
-        packed_indexes: torch.LongTensor,
-        key_values_lens: torch.IntTensor,
-        packed_key_value_indexes: torch.Tensor,
-    ):
-        """Update KV-cache with VAE-encoded image tokens."""
-        packed_text_embedding = self.transformer.model.embed_tokens(packed_text_ids)
-        packed_sequence = packed_text_embedding.new_zeros((sum(packed_seqlens), self.hidden_size))
-        packed_sequence[packed_text_indexes] = packed_text_embedding
-
-        padded_latent = self.vae.encode(padded_images)
-
-        p = self.latent_patch_size
-        packed_latent = []
-        for latent, (h, w) in zip(padded_latent, patchified_vae_latent_shapes):
-            packed_latent.append(self.patchify_latent(latent, h, w))
-        packed_latent = torch.cat(packed_latent, dim=0)
-
-        packed_pos_embed = self.latent_pos_embed(packed_vae_position_ids)
-        packed_timestep_embeds = self.time_embedder(packed_timesteps)
-        packed_latent = self.vae2llm(packed_latent) + packed_timestep_embeds + packed_pos_embed
-        if packed_latent.dtype != packed_sequence.dtype:
-            packed_latent = packed_latent.to(packed_sequence.dtype)
-        packed_sequence[packed_vae_token_indexes] = packed_latent
-
-        extra = {}
-        if self.use_moe:
-            extra = {
-                "mode": "gen",
-                "packed_vae_token_indexes": packed_vae_token_indexes,
-                "packed_text_indexes": packed_text_indexes,
-            }
-
-        output = self.transformer(
-            packed_query_sequence=packed_sequence,
-            query_lens=packed_seqlens,
-            packed_query_position_ids=packed_position_ids,
-            packed_query_indexes=packed_indexes,
-            past_key_values=past_key_values,
-            key_values_lens=key_values_lens,
-            packed_key_value_indexes=packed_key_value_indexes,
-            update_past_key_values=True,
-            is_causal=False,
-            **extra,
-        )
-        return output.past_key_values
