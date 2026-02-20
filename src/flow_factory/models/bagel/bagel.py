@@ -844,10 +844,7 @@ class BagelAdapter(BaseAdapter):
         # Decide whether to rebuild context
         if rebuild_context is None:
             # Auto-detect: rebuild if we have specs and are in training mode
-            rebuild_context = (
-                gen_context_spec is not None and
-                any(p.requires_grad for p in self.get_trainable_parameters())
-            )
+            rebuild_context = gen_context_spec is not None and self._mode == "train"
 
         # 1. Build or reuse KV-caches
         if rebuild_context and gen_context_spec is not None:
