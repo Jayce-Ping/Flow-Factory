@@ -531,9 +531,6 @@ class BagelAdapter(BaseAdapter):
                 gen_spec.steps.append(("vae_image", img_tensor))
                 gen_spec.steps.append(("vit_image", img_tensor))
 
-            cfg_text_ctx = deepcopy(gen_ctx)
-            cfg_text_spec = deepcopy(gen_spec)
-
         cfg_text_ctx = deepcopy(gen_ctx)
         cfg_text_spec = deepcopy(gen_spec)
 
@@ -843,11 +840,11 @@ class BagelAdapter(BaseAdapter):
 
         # Decide whether to rebuild context
         if rebuild_context is None:
-            # Auto-detect: rebuild if we have specs and are in training mode
-            rebuild_context = gen_context_spec is not None and self._mode == "train"
+            # Auto-detect: rebuild if we have specs
+            rebuild_context = gen_context_spec is not None and past_key_values is None 
 
         # 1. Build or reuse KV-caches
-        if rebuild_context and gen_context_spec is not None:
+        if rebuild_context:
             def to_single_spec(spec):
                 if isinstance(spec, list):
                     assert len(spec) == 1, f"Only batch_size 1 is supported for Bagel context rebuilding, but got batch of size {len(spec)}"
@@ -974,7 +971,6 @@ class BagelAdapter(BaseAdapter):
         past_key_values: NaiveCache,
         cfg_text_past_kv: NaiveCache,
         cfg_img_past_kv: NaiveCache,
-        image_shape: Tuple[int, int],
         num_inference_steps: int,
         timestep_shift: float,
         cfg_text_scale: float,
@@ -982,7 +978,6 @@ class BagelAdapter(BaseAdapter):
         cfg_interval: Tuple[float, float],
         cfg_renorm_min: float,
         cfg_renorm_type: str,
-        noise_level: float,
         compute_log_prob: bool,
         trajectory_indices: TrajectoryIndicesType,
         extra_call_back_kwargs: List[str],
@@ -1087,7 +1082,6 @@ class BagelAdapter(BaseAdapter):
         cfg_renorm_min: float = 0.0,
         cfg_renorm_type: str = "global",
         timestep_shift: float = 3.0,
-        noise_level: float = 0.7,
         compute_log_prob: bool = True,
         extra_call_back_kwargs: List[str] = [],
         trajectory_indices: TrajectoryIndicesType = "all",
@@ -1145,7 +1139,6 @@ class BagelAdapter(BaseAdapter):
                 past_key_values=gen_ctx["past_key_values"],
                 cfg_text_past_kv=cfg_text_ctx["past_key_values"],
                 cfg_img_past_kv=cfg_img_ctx["past_key_values"],
-                image_shape=image_shape,
                 num_inference_steps=num_inference_steps,
                 timestep_shift=timestep_shift,
                 cfg_text_scale=cfg_text_scale,
@@ -1153,7 +1146,6 @@ class BagelAdapter(BaseAdapter):
                 cfg_interval=cfg_interval,
                 cfg_renorm_min=cfg_renorm_min,
                 cfg_renorm_type=cfg_renorm_type,
-                noise_level=noise_level,
                 compute_log_prob=compute_log_prob,
                 trajectory_indices=trajectory_indices,
                 extra_call_back_kwargs=extra_call_back_kwargs,
