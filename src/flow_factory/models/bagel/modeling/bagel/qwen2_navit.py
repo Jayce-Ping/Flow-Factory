@@ -807,7 +807,7 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel):
         return self.model
     
     def forward(self, *args, **kwargs):
-        mode = kwargs.pop('mode', 'gen')
+        mode = kwargs.get('mode', 'und')
         if mode == 'embed':
             return self.get_input_embeddings(*args, **kwargs)
         else:
