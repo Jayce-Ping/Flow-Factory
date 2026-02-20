@@ -14,7 +14,7 @@ data:
   dataset_dir: "dataset/pickscore"  # Path to dataset folder
   preprocessing_batch_size: 8  # Batch size for preprocessing
   dataloader_num_workers: 16  # Number of workers for DataLoader
-  force_reprocess: false  # Force reprocessing of the dataset
+  force_reprocess: true  # Force reprocessing of the dataset
   cache_dir: "~/jcy/.cache/flow_factory/datasets" # Cache directory for preprocessed datasets
   max_dataset_size: 1024  # Limit the maximum number of samples in the dataset
 
@@ -41,7 +41,7 @@ train:
   trainer_type: 'grpo' # Options: 'grpo', 'nft', 'awm'
   advantage_aggregation: 'gdpo' # Options: 'sum', 'gdpo'
   # Clipping
-  clip_range: 1.0e-4  # PPO/GRPO clipping range
+  clip_range: 1.0e-5  # PPO/GRPO clipping range
   adv_clip_range: 5.0  # Advantage clipping range
   # KL div
   kl_type: 'v-based' # Options: 'x-based', 'v-based'
@@ -50,7 +50,7 @@ train:
 
   # Sampling settings
   resolution: 512  # Can be int or [height, width]
-  num_inference_steps: 10  # Number of timesteps
+  num_inference_steps: 15  # Number of timesteps
   # Bagel-specific generation params (passed to inference/forward via **training_args)
   cfg_text_scale: 4.0
   cfg_img_scale: 1.5
@@ -62,12 +62,12 @@ train:
   # Batch and sampling
   per_device_batch_size: 1  # Batch size per device
   group_size: 16  # Group size for GRPO sampling
-  global_std: true  # Use global std for advantage normalization
+  global_std: false  # Use global std for advantage normalization
   unique_sample_num_per_epoch: 48  # Unique samples per group
   gradient_step_per_epoch: 2  # Gradient steps per epoch. The first step is on-policy, the rest are off-policy.
   
   # Optimizer
-  learning_rate: 3.0e-4  # Initial learning rate
+  learning_rate: 1.0e-4  # Initial learning rate
   adam_weight_decay: 1.0e-4  # AdamW weight decay
   adam_betas: [0.9, 0.999]  # AdamW betas
   adam_epsilon: 1.0e-8  # AdamW epsilon
@@ -86,17 +86,17 @@ train:
 
 # Scheduler Configuration
 scheduler:
-  dynamics_type: "CPS"  # Options: Flow-SDE, Dance-SDE, CPS, ODE
-  noise_level: 0.8  # Noise level for sampling
-  num_sde_steps: 3  # Number of noise steps
-  sde_steps: [0, 1, 2, 3, 4, 5]  # Custom noise window, noise steps are randomly selected from this list during training
+  dynamics_type: "Flow-SDE"  # Options: Flow-SDE, Dance-SDE, CPS, ODE
+  noise_level: 1.3  # Noise level for sampling
+  num_sde_steps: 2  # Number of noise steps
+  sde_steps: [0, 1, 2, 3, 4, 5, 6]  # Custom noise window, noise steps are randomly selected from this list during training
   seed: 42  # Scheduler seed (for noise step selection)
 
 # Evaluation settings
 eval:
-  resolution: 1024  # Evaluation resolution
+  resolution: 512  # Evaluation resolution
   per_device_batch_size: 1  # Eval batch size
-  num_inference_steps: 28  # Number of eval timesteps
+  num_inference_steps: 50  # Number of eval timesteps
   eval_freq: 20  # Eval frequency in epochs (0 to disable)
   seed: 42  # Eval seed (defaults to training seed)
   
