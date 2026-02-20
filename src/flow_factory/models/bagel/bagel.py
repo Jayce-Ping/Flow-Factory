@@ -805,9 +805,9 @@ class BagelAdapter(BaseAdapter):
         # Generation Input
         generation_input: Dict[str, torch.Tensor],
         # Context specs (for training re-materialization)
-        gen_context_spec: Optional[ContextSpec] = None,
-        cfg_text_context_spec: Optional[ContextSpec] = None,
-        cfg_img_context_spec: Optional[ContextSpec] = None,
+        gen_context_spec: Optional[Union[ContextSpec, List[ContextSpec]]] = None,
+        cfg_text_context_spec: Optional[Union[ContextSpec, List[ContextSpec]]] = None,
+        cfg_img_context_spec: Optional[Union[ContextSpec, List[ContextSpec]]] = None,
         # OR pre-built KV-caches (for inference)
         past_key_values: Optional[Union[NaiveCache, List[NaiveCache]]] = None,
         cfg_text_past_kv: Optional[Union[NaiveCache, List[NaiveCache]]] = None,
@@ -848,6 +848,16 @@ class BagelAdapter(BaseAdapter):
 
         # 1. Build or reuse KV-caches
         if rebuild_context and gen_context_spec is not None:
+            def to_single_spec(spec):
+                if isinstance(spec, list):
+                    assert len(spec) == 1, f"Only batch_size 1 is supported for Bagel context rebuilding, but got batch of size {len(spec)}"
+                    return spec[0]
+                return spec
+            gen_context_spec = to_single_spec(gen_context_spec)
+            if cfg_text_context_spec is not None:
+                cfg_text_context_spec = to_single_spec(cfg_text_context_spec)
+            if cfg_img_context_spec is not None:
+                cfg_img_context_spec = to_single_spec(cfg_img_context_spec)
             # Training: rebuild context with current (updated) transformer params
             past_key_values = self._rebuild_context(gen_context_spec)
             if cfg_text_context_spec is not None:
