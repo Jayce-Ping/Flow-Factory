@@ -52,7 +52,6 @@ train:
   # Training Timestep distribution
   num_train_timesteps: 2 # Set null to all steps
   time_sampling_strategy: discrete # Options: uniform, logit_normal, discrete, discrete_with_init, discrete_wo_init
-  time_shift: 3.0
   timestep_range: 0.7 # Select fraction of timesteps to train on
   # KL div
   kl_type: 'v-based'
@@ -71,7 +70,6 @@ train:
   cfg_interval: [0.4, 1.0]
   cfg_renorm_min: 0.0
   cfg_renorm_type: global
-  timestep_shift: 3.0
 
   # Batch and sampling
   per_device_batch_size: 1  # Batch size per device
@@ -96,6 +94,7 @@ train:
 # Scheduler Configuration
 scheduler:
   dynamics_type: "ODE"  # Options: Flow-SDE, Dance-SDE, CPS, ODE
+  shift: 3.0 # Shift for noise scheduling
 
 # Evaluation settings
 eval:

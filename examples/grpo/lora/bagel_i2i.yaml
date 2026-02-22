@@ -58,7 +58,6 @@ train:
   cfg_interval: [0.4, 1.0]
   cfg_renorm_min: 0.0
   cfg_renorm_type: global
-  timestep_shift: 3.0
  
   # Batch and sampling
   per_device_batch_size: 1  # Batch size per device
@@ -88,6 +87,7 @@ train:
 # Scheduler Configuration
 scheduler:
   dynamics_type: "CPS"  # Options: Flow-SDE, Dance-SDE, CPS, ODE
+  shift: 3.0 # Shift for noise scheduling
   noise_level: 0.8  # Noise level for sampling
   num_sde_steps: 3  # Number of noise steps
   sde_steps: [0, 1, 2, 3, 4, 5]  # Custom noise window, noise steps are randomly selected from this list during training
@@ -108,7 +108,6 @@ eval:
   cfg_interval: [0.4, 1.0]
   cfg_renorm_min: 0.0
   cfg_renorm_type: global
-  timestep_shift: 3.0
 
 # Reward Model Configuration
 rewards:

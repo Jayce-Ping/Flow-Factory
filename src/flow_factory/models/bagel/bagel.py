@@ -186,10 +186,7 @@ class BagelAdapter(BaseAdapter):
         )
 
     def load_scheduler(self) -> FlowMatchEulerDiscreteSDEScheduler:
-        scheduler_kwargs = {
-            "num_train_timesteps": 1000,
-            "shift": self.model_args.extra_kwargs.get("timestep_shift", 3.0),
-        }
+        scheduler_kwargs = {"num_train_timesteps": 1000}
         if hasattr(self.config, "scheduler_args") and self.config.scheduler_args:
             scheduler_kwargs.update(self.config.scheduler_args.to_dict())
         return FlowMatchEulerDiscreteSDEScheduler(**scheduler_kwargs)
@@ -972,7 +969,6 @@ class BagelAdapter(BaseAdapter):
         cfg_text_past_kv: NaiveCache,
         cfg_img_past_kv: NaiveCache,
         num_inference_steps: int,
-        timestep_shift: float,
         cfg_text_scale: float,
         cfg_img_scale: float,
         cfg_interval: Tuple[float, float],
@@ -984,11 +980,8 @@ class BagelAdapter(BaseAdapter):
         device: torch.device,
     ) -> Dict[str, Any]:
         """Core denoising loop (inference only, uses pre-built KV-caches)."""
-        linear_sigmas = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
-        shifted_sigmas = (
-            timestep_shift * linear_sigmas / (1 + (timestep_shift - 1) * linear_sigmas)
-        )
-        self.scheduler.set_timesteps(sigmas=shifted_sigmas.tolist(), device=device)
+        unshifted_sigmas = np.linspace(1.0, 0.0, num_inference_steps)[:-1]
+        self.scheduler.set_timesteps(sigmas=unshifted_sigmas.tolist(), device=device) # Shift is applied inside
         timesteps = self.scheduler.timesteps
 
         x_t = generation_input["packed_init_noises"].to(device)
@@ -1081,7 +1074,6 @@ class BagelAdapter(BaseAdapter):
         cfg_interval: Tuple[float, float] = (0.4, 1.0),
         cfg_renorm_min: float = 0.0,
         cfg_renorm_type: str = "global",
-        timestep_shift: float = 3.0,
         compute_log_prob: bool = True,
         extra_call_back_kwargs: List[str] = [],
         trajectory_indices: TrajectoryIndicesType = "all",
@@ -1140,7 +1132,6 @@ class BagelAdapter(BaseAdapter):
                 cfg_text_past_kv=cfg_text_ctx["past_key_values"],
                 cfg_img_past_kv=cfg_img_ctx["past_key_values"],
                 num_inference_steps=num_inference_steps,
-                timestep_shift=timestep_shift,
                 cfg_text_scale=cfg_text_scale,
                 cfg_img_scale=cfg_img_scale,
                 cfg_interval=cfg_interval,
